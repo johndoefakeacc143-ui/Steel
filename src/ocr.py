@@ -6,6 +6,7 @@ import pytesseract
 from PIL import Image
 
 from src.image_processor import ImageProcessor
+from src.tesseract_setup import ensure_tesseract
 
 
 class OCREngine:
@@ -14,6 +15,7 @@ class OCREngine:
     def __init__(self, lang: str = "eng") -> None:
         self.lang = lang
         self.processor = ImageProcessor()
+        ensure_tesseract()
 
     def extract_text(self, image) -> str:
         enhanced = self.processor.enhance_contrast(image)

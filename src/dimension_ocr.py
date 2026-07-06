@@ -53,6 +53,10 @@ class DimensionEstimator:
             import cv2  # noqa: F401
             import numpy as np  # noqa: F401
             import pytesseract  # noqa: F401
+
+            from src.tesseract_setup import ensure_tesseract
+
+            ensure_tesseract()
         except Exception as exc:  # noqa: BLE001
             logger.warning("OCR dependencies unavailable (%s); skipping dimensions", exc)
             return {}, {}

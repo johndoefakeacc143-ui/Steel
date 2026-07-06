@@ -30,11 +30,15 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             line(f"    {name}: NOT IMPORTABLE ({exc})")
 
-    # 2. Tesseract binary
+    # 2. Tesseract binary (with auto-detection)
     line("\n[2] Tesseract binary")
     try:
         import pytesseract
 
+        from src.tesseract_setup import ensure_tesseract
+
+        found = ensure_tesseract()
+        line(f"    auto-detect found tesseract = {found}")
         line(f"    tesseract_cmd = {pytesseract.pytesseract.tesseract_cmd}")
         line(f"    version = {pytesseract.get_tesseract_version()}")
     except Exception as exc:  # noqa: BLE001

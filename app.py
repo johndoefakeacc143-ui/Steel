@@ -51,14 +51,10 @@ def find_inputs(input_dir: Path, single_name: str | None) -> list[Path]:
 
 
 def tesseract_available() -> bool:
-    """Return True if the Tesseract OCR binary is installed and callable."""
-    try:
-        import pytesseract
+    """Return True if Tesseract can be called (auto-detecting its location)."""
+    from src.tesseract_setup import ensure_tesseract
 
-        pytesseract.get_tesseract_version()
-        return True
-    except Exception:  # noqa: BLE001 - any failure means OCR is unusable
-        return False
+    return ensure_tesseract()
 
 
 def enrich_pages_with_ocr(pages: list, ocr: OCREngine) -> None:
