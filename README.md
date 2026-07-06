@@ -82,3 +82,16 @@ Excel BOM files are written to `output/` as `<filename>_BOM.xlsx`.
 - Plates: `PL1/2`
 
 The parser extracts members from PDF tables and text. When a page has little embedded text, OpenCV preprocessing and Tesseract OCR are used automatically.
+
+## Length extraction from dimension lines
+
+General-arrangement drawings usually show member lengths as dimension annotations
+rather than in a table, and those labels are drawn as graphics (often rotated) that
+are not in the PDF text layer. When OCR is enabled (the default), each page image is
+OCR'd — including a 90°-rotated pass to read vertical dimensions — and every beam /
+bracing mark is assigned the nearest dimension value (the most common one per mark).
+For example, in `ABC.pdf` this recovers `Length = 2000` for beams such as `B7`.
+
+These lengths are OCR-based estimates from the drawing geometry; base plates (`BP*`)
+and plan-bay references (`PB*`) are not assigned a length. Use `--no-ocr` to disable
+this (lengths then stay blank unless present in a table or text).

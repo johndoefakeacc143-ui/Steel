@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from src.bom_parser import BOMParser
+from src.dimension_ocr import DimensionEstimator
 from src.excel_exporter import ExcelExporter
 from src.ocr import OCREngine
 from src.pdf_reader import PDFReader
@@ -59,12 +60,20 @@ def process_pdf(pdf_path: Path, output_dir: Path, use_ocr: bool) -> Path:
     reader = PDFReader(pdf_path)
     pages = reader.read()
 
+    mark_lengths: dict = {}
+    page_default_lengths: dict = {}
     if use_ocr:
         ocr = OCREngine()
         enrich_pages_with_ocr(pages, ocr)
 
+        # Recover member lengths from drawing dimension lines via OCR.
+        estimator = DimensionEstimator()
+        mark_lengths, page_default_lengths = estimator.estimate(pages)
+        if mark_lengths:
+            logging.info("Estimated lengths for %s marks from dimensions", len(mark_lengths))
+
     parser = BOMParser()
-    bom_df = parser.parse_pages(pages)
+    bom_df = parser.parse_pages(pages, mark_lengths, page_default_lengths)
 
     output_name = f"{pdf_path.stem}_BOM.xlsx"
     output_path = output_dir / output_name

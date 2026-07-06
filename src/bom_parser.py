@@ -28,6 +28,14 @@ DRAWING_MARK_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Linear members (beams/bracings) can carry a length; plates and plan-bay
+# references cannot.
+LINEAR_MARK_PATTERN = re.compile(r"^(B[2-9]|BR\d+)$", re.IGNORECASE)
+
+
+def _is_linear_mark(mark: str) -> bool:
+    return bool(LINEAR_MARK_PATTERN.match(mark))
+
 LENGTH_PATTERN = re.compile(
     r"(?:length|len|lg|l)\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(?:['\"]|ft|feet|in|inch|mm)?",
     re.IGNORECASE,
@@ -74,12 +82,26 @@ class BOMItem:
 class BOMParser:
     """Build a BOM DataFrame from extracted PDF content."""
 
-    def parse_pages(self, pages: list) -> pd.DataFrame:
+    def parse_pages(
+        self,
+        pages: list,
+        mark_lengths: dict[tuple[int, str], float] | None = None,
+        page_default_lengths: dict[int, float] | None = None,
+    ) -> pd.DataFrame:
         items: list[BOMItem] = []
+        mark_lengths = mark_lengths or {}
+        page_default_lengths = page_default_lengths or {}
 
         for page in pages:
             items.extend(self._parse_bom_tables(page.tables, page.page_number))
-            items.extend(self._parse_drawing_marks(page.text, page.page_number))
+            items.extend(
+                self._parse_drawing_marks(
+                    page.text,
+                    page.page_number,
+                    mark_lengths,
+                    page_default_lengths.get(page.page_number),
+                )
+            )
             items.extend(self._parse_steel_shapes(page.text, page.page_number))
 
         if not items:
@@ -166,9 +188,17 @@ class BOMParser:
             source_page=page_number,
         )
 
-    def _parse_drawing_marks(self, text: str, page_number: int) -> list[BOMItem]:
+    def _parse_drawing_marks(
+        self,
+        text: str,
+        page_number: int,
+        mark_lengths: dict[tuple[int, str], float] | None = None,
+        page_default_length: float | None = None,
+    ) -> list[BOMItem]:
         if not text.strip():
             return []
+
+        mark_lengths = mark_lengths or {}
 
         # Count marks per line so a length/grade annotated on the same line as a
         # mark (e.g. "B3 ISMB250 LENGTH 3200") is captured, mirroring the steel
@@ -185,19 +215,28 @@ class BOMParser:
             for match in marks:
                 counts[(self._normalize_mark(match), length, grade)] += 1
 
-        return [
-            BOMItem(
-                mark=mark,
-                description=self._describe_mark(mark),
-                quantity=count,
-                length=length,
-                grade=grade,
-                source_page=page_number,
+        items: list[BOMItem] = []
+        for (mark, length, grade), count in sorted(
+            counts.items(), key=lambda kv: (kv[0][0], kv[0][1] or 0.0, kv[0][2])
+        ):
+            # When the text layer has no length, fall back to a dimension read
+            # from the drawing via OCR (per-mark first, then the page default
+            # beam dimension for linear members).
+            if length is None:
+                length = mark_lengths.get((page_number, mark))
+            if length is None and page_default_length is not None and _is_linear_mark(mark):
+                length = page_default_length
+            items.append(
+                BOMItem(
+                    mark=mark,
+                    description=self._describe_mark(mark),
+                    quantity=count,
+                    length=length,
+                    grade=grade,
+                    source_page=page_number,
+                )
             )
-            for (mark, length, grade), count in sorted(
-                counts.items(), key=lambda kv: (kv[0][0], kv[0][1] or 0.0, kv[0][2])
-            )
-        ]
+        return items
 
     def _parse_steel_shapes(self, text: str, page_number: int) -> list[BOMItem]:
         if not text.strip():
