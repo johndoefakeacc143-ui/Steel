@@ -14,11 +14,15 @@ already contain, so accurate horizontal counts are preserved and rotated marks
 
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 
 from src.bom_parser import DRAWING_MARK_PATTERN
 
-_EPS = 14.0  # max centre distance (px) for two chars to join a cluster
+_EPS = 12.0  # max centre distance (px) for two chars to join a cluster
+_MAX_LABEL_CHARS = 6  # clusters larger than this are horizontal text lines
+# Anchored mark pattern for validating a single reconstructed label.
+_MARK_FULLMATCH = re.compile(r"(?:BR\d+|BP\d+|PB[1-9][A-Z]?|PB[A-Z]|B[2-9])$", re.I)
 
 
 def _clusters(chars: list[dict]) -> list[list[dict]]:
@@ -64,12 +68,27 @@ def _clusters(chars: list[dict]) -> list[list[dict]]:
 
 
 def _cluster_marks(chars: list[dict]) -> Counter:
+    """Count marks from single-label clusters, trying every reading order.
+
+    Rotated labels can read top-to-bottom or bottom-to-top; each small cluster is
+    one label, so it contributes at most one mark (counted once) regardless of
+    orientation.
+    """
     found: Counter = Counter()
     for group in _clusters(chars):
-        ordered = sorted(group, key=lambda c: (round(c["top"] / 6.0), c["x0"]))
-        token = "".join(c["text"] for c in ordered)
-        for match in DRAWING_MARK_PATTERN.findall(token):
-            found[match.upper()] += 1
+        if len(group) > _MAX_LABEL_CHARS:
+            continue
+        orderings = (
+            sorted(group, key=lambda c: c["top"]),
+            sorted(group, key=lambda c: -c["top"]),
+            sorted(group, key=lambda c: c["x0"]),
+            sorted(group, key=lambda c: -c["x0"]),
+        )
+        for ordered in orderings:
+            token = "".join(c["text"] for c in ordered).strip()
+            if _MARK_FULLMATCH.fullmatch(token):
+                found[token.upper()] += 1
+                break
     return found
 
 
