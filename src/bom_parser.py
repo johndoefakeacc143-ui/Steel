@@ -103,6 +103,14 @@ class BOMParser:
                 )
             )
             items.extend(self._parse_steel_shapes(page.text, page.page_number))
+            items.extend(
+                self._parse_stacked_marks(
+                    getattr(page, "stacked_marks", None),
+                    page.page_number,
+                    mark_lengths,
+                    page_default_lengths.get(page.page_number),
+                )
+            )
 
         if not items:
             return self._empty_dataframe()
@@ -233,6 +241,36 @@ class BOMParser:
                     quantity=count,
                     length=length,
                     grade=grade,
+                    source_page=page_number,
+                )
+            )
+        return items
+
+    def _parse_stacked_marks(
+        self,
+        stacked_marks: dict[str, int] | None,
+        page_number: int,
+        mark_lengths: dict[tuple[int, str], float] | None = None,
+        page_default_length: float | None = None,
+    ) -> list[BOMItem]:
+        """Build items for marks recovered from rotated/stacked characters."""
+        if not stacked_marks:
+            return []
+        mark_lengths = mark_lengths or {}
+
+        items: list[BOMItem] = []
+        for raw_mark, count in sorted(stacked_marks.items()):
+            mark = self._normalize_mark(raw_mark)
+            length = mark_lengths.get((page_number, mark))
+            if length is None and page_default_length is not None and _is_linear_mark(mark):
+                length = page_default_length
+            items.append(
+                BOMItem(
+                    mark=mark,
+                    description=self._describe_mark(mark),
+                    quantity=count,
+                    length=length,
+                    grade="",
                     source_page=page_number,
                 )
             )

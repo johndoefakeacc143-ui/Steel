@@ -15,6 +15,8 @@ class PageContent:
     text: str
     tables: list[list[list[str | None]]] = field(default_factory=list)
     image: np.ndarray | None = None
+    # Marks recovered from rotated/stacked characters that the text layer misses.
+    stacked_marks: dict[str, int] = field(default_factory=dict)
 
 
 class PDFReader:
@@ -24,18 +26,25 @@ class PDFReader:
         self.pdf_path = pdf_path
 
     def read(self) -> list[PageContent]:
+        from src.mark_recovery import recover_stacked_marks
+
         pages: list[PageContent] = []
         with pdfplumber.open(self.pdf_path) as pdf:
             for index, page in enumerate(pdf.pages, start=1):
                 text = page.extract_text() or ""
                 tables = page.extract_tables() or []
                 image = self._page_to_image(page)
+                try:
+                    stacked = recover_stacked_marks(page.chars, text)
+                except Exception:  # noqa: BLE001 - never let recovery abort a read
+                    stacked = {}
                 pages.append(
                     PageContent(
                         page_number=index,
                         text=text,
                         tables=tables,
                         image=image,
+                        stacked_marks=stacked,
                     )
                 )
         return pages
