@@ -170,18 +170,33 @@ class BOMParser:
         if not text.strip():
             return []
 
-        counts = Counter(
-            self._normalize_mark(match)
-            for match in DRAWING_MARK_PATTERN.findall(text)
-        )
+        # Count marks per line so a length/grade annotated on the same line as a
+        # mark (e.g. "B3 ISMB250 LENGTH 3200") is captured, mirroring the steel
+        # shape parser. Marks sharing the same length/grade are grouped together.
+        counts: Counter[tuple[str, float | None, str]] = Counter()
+        for line in text.splitlines():
+            marks = DRAWING_MARK_PATTERN.findall(line)
+            if not marks:
+                continue
+            length_match = LENGTH_PATTERN.search(line)
+            length = float(length_match.group(1)) if length_match else None
+            grade_match = GRADE_PATTERN.search(line)
+            grade = grade_match.group(1).upper() if grade_match else ""
+            for match in marks:
+                counts[(self._normalize_mark(match), length, grade)] += 1
+
         return [
             BOMItem(
                 mark=mark,
                 description=self._describe_mark(mark),
                 quantity=count,
+                length=length,
+                grade=grade,
                 source_page=page_number,
             )
-            for mark, count in sorted(counts.items())
+            for (mark, length, grade), count in sorted(
+                counts.items(), key=lambda kv: (kv[0][0], kv[0][1] or 0.0, kv[0][2])
+            )
         ]
 
     def _parse_steel_shapes(self, text: str, page_number: int) -> list[BOMItem]:
