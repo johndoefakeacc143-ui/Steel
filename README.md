@@ -39,6 +39,11 @@ sudo apt-get install tesseract-ocr
 brew install tesseract
 ```
 
+> **Tesseract is required to capture member lengths.** Dimension values on GA
+> drawings are drawn as graphics, so they are read via OCR. Without Tesseract the
+> `length` column will be empty (except values you set in `member_lengths.json`),
+> and the app prints a warning at startup.
+
 ## Setup
 
 ```bash

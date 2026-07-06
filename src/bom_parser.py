@@ -139,10 +139,14 @@ class BOMParser:
                     item.length = scalar_overrides[item.mark]
 
         if group_overrides:
-            # Replace all auto-detected rows for a grouped mark with the
-            # user-specified length groups.
+            # Replace auto-detected rows for a grouped mark with the user-specified
+            # length groups - but only for marks actually present in this drawing,
+            # so overrides for one drawing are not injected into others.
+            present_marks = {item.mark for item in items}
             items = [item for item in items if item.mark not in group_overrides]
             for mark, groups in group_overrides.items():
+                if mark not in present_marks:
+                    continue
                 description = self._describe_mark(mark)
                 for length, quantity in groups:
                     items.append(

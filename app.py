@@ -50,6 +50,17 @@ def find_inputs(input_dir: Path, single_name: str | None) -> list[Path]:
     return files
 
 
+def tesseract_available() -> bool:
+    """Return True if the Tesseract OCR binary is installed and callable."""
+    try:
+        import pytesseract
+
+        pytesseract.get_tesseract_version()
+        return True
+    except Exception:  # noqa: BLE001 - any failure means OCR is unusable
+        return False
+
+
 def enrich_pages_with_ocr(pages: list, ocr: OCREngine) -> None:
     for page in pages:
         if len(page.text.strip()) >= MIN_TEXT_LENGTH:
@@ -200,6 +211,13 @@ def main(argv: list[str] | None = None) -> int:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     use_ocr = not args.no_ocr
+    if use_ocr and ai_reader is None and not tesseract_available():
+        logging.warning(
+            "Tesseract OCR is not installed - member lengths read from drawing "
+            "dimension lines will be EMPTY (only values from member_lengths.json "
+            "will appear). Install it: `sudo apt-get install tesseract-ocr` "
+            "(Ubuntu/Debian) or `brew install tesseract` (macOS)."
+        )
     length_overrides = load_length_overrides(args.input_dir, args.lengths_file)
     output_files: list[Path] = []
 
