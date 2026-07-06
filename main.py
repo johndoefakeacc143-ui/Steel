@@ -49,6 +49,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-dir", type=Path, default=INPUT_DIR)
     parser.add_argument("--output", type=Path, default=OUTPUT_DIR / "BOM.xlsx")
     parser.add_argument("--no-ocr", action="store_true", help="Disable OCR for scanned PDFs")
+    parser.add_argument(
+        "--engine",
+        choices=["classic", "ai"],
+        default="classic",
+        help="Extraction engine: 'classic' (pdfplumber/OCR) or 'ai' (vision LLM)",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     return parser
 
@@ -67,13 +73,32 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("No PDF/DWG/DXF files found in %s", args.input_dir)
         return 1
 
+    ai_reader = None
+    if args.engine == "ai":
+        from src.ai_reader import AIConfigError, VisionAIReader
+
+        ai_reader = VisionAIReader()
+        if not ai_reader.available():
+            logger.error(
+                "AI engine selected but no API key found. "
+                "Set ANU_AI_API_KEY (or OPENAI_API_KEY). See README."
+            )
+            return 2
+        logger.info("Using AI vision engine: model=%s", ai_reader.model)
+
     extractor = MemberExtractor()
     members = []
     for path in drawings:
         try:
             logger.info("Reading %s", path.name)
-            raw = read_file(path, use_ocr=not args.no_ocr)
-            found = extractor.extract(raw)
+            if ai_reader is not None:
+                if path.suffix.lower() != ".pdf":
+                    logger.warning("  AI engine supports PDF only; skipping %s", path.name)
+                    continue
+                found = ai_reader.read(path)
+            else:
+                raw = read_file(path, use_ocr=not args.no_ocr)
+                found = extractor.extract(raw)
             logger.info("  extracted %d members from %s", len(found), path.name)
             members.extend(found)
         except Exception:  # noqa: BLE001 - one bad file must not abort the run

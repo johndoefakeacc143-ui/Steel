@@ -32,9 +32,39 @@ sudo apt-get install tesseract-ocr
 2. Run:
 
 ```bash
-python main.py            # process input/ -> output/BOM.xlsx
+python main.py            # process input/ -> output/BOM.xlsx (classic engine)
 python main.py --no-ocr   # skip OCR
 python main.py -v         # verbose logging
+```
+
+## Engines
+
+Two extraction engines are available via `--engine`:
+
+- `classic` (default) — `pdfplumber` for text/tables, with OpenCV + Tesseract OCR
+  fallback for scanned pages.
+- `ai` — a **vision LLM** reads the drawing image directly. Unlike OCR, it copes
+  with faint, low-contrast, and rotated dimension text and returns structured
+  members. Recommended for General Arrangement drawings.
+
+```bash
+python main.py --engine ai
+```
+
+The AI engine is provider-agnostic (OpenAI-compatible Chat Completions), so it
+works with OpenAI, OpenRouter, Azure, or a local server (vLLM / Ollama /
+llama.cpp). Configure via environment variables (no key is stored in the repo):
+
+```bash
+export ANU_AI_API_KEY=sk-...            # or OPENAI_API_KEY
+export ANU_AI_MODEL=gpt-4o-mini         # any vision-capable model
+export ANU_AI_BASE_URL=https://api.openai.com/v1   # or a local/compatible endpoint
+```
+
+To try the pipeline without a key (uses a canned model response):
+
+```bash
+python tools/demo_ai_reader.py
 ```
 
 ## Output — `output/BOM.xlsx`
@@ -53,6 +83,7 @@ python main.py -v         # verbose logging
 ├── tools/generate_sample.py  # builds a sample member-schedule PDF
 └── src/
     ├── readers.py          # PDF (pdfplumber + OCR) and DWG/DXF (ezdxf) readers
+    ├── ai_reader.py        # vision-LLM engine (reads drawings without OCR)
     ├── sections.py         # ISMB/ISMC/RHS/PL unit-weight catalogue
     ├── extractor.py        # table + text member extraction
     ├── bom.py              # detailed + summary tables
