@@ -3,21 +3,28 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass
 
 import pandas as pd
 
-# Common steel member designations found on structural drawings
-MEMBER_PATTERN = re.compile(
+# Standard AISC / steel shape designations
+STEEL_SHAPE_PATTERN = re.compile(
     r"\b("
-    r"W\s*\d+\s*[xX×]\s*[\d.]+|"  # Wide flange: W12x26
-    r"HSS\s*\d+(?:\.\d+)?\s*[xX×]\s*\d+(?:\.\d+)?(?:\s*[xX×]\s*[\d/]+)?|"  # HSS
-    r"L\s*\d+(?:\.\d+)?\s*[xX×]\s*\d+(?:\.\d+)?(?:\s*[xX×]\s*[\d/]+)?|"  # Angle
-    r"C\s*\d+\s*[xX×]\s*[\d.]+|"  # Channel
-    r"WT\s*\d+\s*[xX×]\s*[\d.]+|"  # Tee
-    r"PL\s*[\d/]+(?:\s*[\"']?\s*[xX×]\s*[\d/]+)?|"  # Plate
-    r"MC\s*\d+\s*[xX×]\s*[\d.]+"  # Misc channel
+    r"W\s*\d+\s*[xX×]\s*[\d.]+|"
+    r"HSS\s*\d+(?:\.\d+)?\s*[xX×]\s*\d+(?:\.\d+)?(?:\s*[xX×]\s*[\d/]+)?|"
+    r"L\s*\d+(?:\.\d+)?\s*[xX×]\s*\d+(?:\.\d+)?(?:\s*[xX×]\s*[\d/]+)?|"
+    r"C\s*\d+\s*[xX×]\s*[\d.]+|"
+    r"WT\s*\d+\s*[xX×]\s*[\d.]+|"
+    r"PL\s*[\d/]+(?:\s*[\"']?\s*[xX×]\s*[\d/]+)?|"
+    r"MC\s*\d+\s*[xX×]\s*[\d.]+"
     r")\b",
+    re.IGNORECASE,
+)
+
+# Member marks used on GA / fabrication drawings (e.g. B2, BR1, BP1)
+DRAWING_MARK_PATTERN = re.compile(
+    r"\b(BR\d+|BP\d+|B[2-9]|PB[1-9][A-Z]?|PB[A-Z])\b",
     re.IGNORECASE,
 )
 
@@ -37,12 +44,19 @@ GRADE_PATTERN = re.compile(
 )
 
 TABLE_HEADER_KEYWORDS = {
-    "mark": ("mark", "member", "item", "designation", "size"),
+    "mark": ("mark", "member mark", "member", "item", "designation", "size"),
     "description": ("description", "desc", "member type", "type"),
-    "quantity": ("qty", "quantity", "no", "count", "pcs"),
+    "quantity": ("qty", "quantity", "no.", "no", "count", "pcs"),
     "length": ("length", "len", "lg", "l (ft)", "length (ft)"),
     "grade": ("grade", "material", "mat", "steel grade"),
     "weight": ("weight", "wt", "mass", "kg", "lbs"),
+}
+
+MARK_DESCRIPTIONS = {
+    "B": "Beam / column member",
+    "BR": "Bracing member",
+    "BP": "Base plate",
+    "PB": "Plan bay / section reference",
 }
 
 
@@ -64,8 +78,9 @@ class BOMParser:
         items: list[BOMItem] = []
 
         for page in pages:
-            items.extend(self._parse_tables(page.tables, page.page_number))
-            items.extend(self._parse_text(page.text, page.page_number))
+            items.extend(self._parse_bom_tables(page.tables, page.page_number))
+            items.extend(self._parse_drawing_marks(page.text, page.page_number))
+            items.extend(self._parse_steel_shapes(page.text, page.page_number))
 
         if not items:
             return self._empty_dataframe()
@@ -75,7 +90,7 @@ class BOMParser:
         df = self._aggregate_duplicates(df)
         return df
 
-    def _parse_tables(
+    def _parse_bom_tables(
         self, tables: list[list[list[str | None]]], page_number: int
     ) -> list[BOMItem]:
         items: list[BOMItem] = []
@@ -83,7 +98,7 @@ class BOMParser:
             if not table or len(table) < 2:
                 continue
             header_map = self._map_table_headers(table[0])
-            if not header_map:
+            if not self._is_bom_table(header_map, table[0]):
                 continue
             for row in table[1:]:
                 if not row or all(not cell or not str(cell).strip() for cell in row):
@@ -93,14 +108,33 @@ class BOMParser:
                     items.append(item)
         return items
 
+    @staticmethod
+    def _is_bom_table(header_map: dict[str, int], header_row: list[str | None]) -> bool:
+        if "mark" not in header_map:
+            return False
+        if len(header_map) < 2:
+            return False
+        max_header_len = max(
+            (len(str(cell).strip()) for cell in header_row if cell),
+            default=0,
+        )
+        return max_header_len <= 80
+
     def _map_table_headers(self, header_row: list[str | None]) -> dict[str, int]:
         mapping: dict[str, int] = {}
         for index, cell in enumerate(header_row):
             if not cell:
                 continue
             normalized = str(cell).strip().lower()
+            if len(normalized) > 80:
+                continue
             for field, keywords in TABLE_HEADER_KEYWORDS.items():
-                if any(keyword in normalized for keyword in keywords):
+                if field in mapping:
+                    continue
+                if any(
+                    re.search(rf"\b{re.escape(keyword)}\b", normalized)
+                    for keyword in keywords
+                ):
                     mapping[field] = index
                     break
         return mapping
@@ -114,8 +148,8 @@ class BOMParser:
                 return ""
             return str(row[index]).strip()
 
-        mark = cell("mark") or cell("description")
-        if not mark:
+        mark = cell("mark")
+        if not mark or len(mark) > 40:
             return None
 
         quantity = self._parse_int(cell("quantity"), default=1)
@@ -124,7 +158,7 @@ class BOMParser:
 
         return BOMItem(
             mark=self._normalize_mark(mark),
-            description=cell("description") or mark,
+            description=cell("description") or self._describe_mark(mark),
             quantity=quantity,
             length=length,
             grade=cell("grade").upper(),
@@ -132,15 +166,34 @@ class BOMParser:
             source_page=page_number,
         )
 
-    def _parse_text(self, text: str, page_number: int) -> list[BOMItem]:
+    def _parse_drawing_marks(self, text: str, page_number: int) -> list[BOMItem]:
+        if not text.strip():
+            return []
+
+        counts = Counter(
+            self._normalize_mark(match)
+            for match in DRAWING_MARK_PATTERN.findall(text)
+        )
+        return [
+            BOMItem(
+                mark=mark,
+                description=self._describe_mark(mark),
+                quantity=count,
+                source_page=page_number,
+            )
+            for mark, count in sorted(counts.items())
+        ]
+
+    def _parse_steel_shapes(self, text: str, page_number: int) -> list[BOMItem]:
         if not text.strip():
             return []
 
         items: list[BOMItem] = []
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-
-        for line in lines:
-            matches = MEMBER_PATTERN.findall(line)
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            matches = STEEL_SHAPE_PATTERN.findall(line)
             if not matches:
                 continue
 
@@ -161,11 +214,23 @@ class BOMParser:
                 )
         return items
 
+    @classmethod
+    def _describe_mark(cls, mark: str) -> str:
+        normalized = cls._normalize_mark(mark)
+        if normalized.startswith("BR"):
+            return MARK_DESCRIPTIONS["BR"]
+        if normalized.startswith("BP"):
+            return MARK_DESCRIPTIONS["BP"]
+        if normalized.startswith("PB"):
+            return MARK_DESCRIPTIONS["PB"]
+        if re.fullmatch(r"B[2-9]", normalized):
+            return MARK_DESCRIPTIONS["B"]
+        return "Structural member"
+
     @staticmethod
     def _normalize_mark(mark: str) -> str:
         normalized = re.sub(r"\s+", "", mark.upper())
-        normalized = normalized.replace("×", "X")
-        return normalized
+        return normalized.replace("×", "X")
 
     @staticmethod
     def _parse_int(value: str, default: int = 1) -> int:
@@ -204,7 +269,7 @@ class BOMParser:
         aggregated = (
             df.groupby(group_cols, dropna=False, as_index=False)
             .agg({"quantity": "sum", "weight": "first"})
-            .sort_values(["mark", "source_page"], na_position="last")
+            .sort_values(["mark"], na_position="last")
             .reset_index(drop=True)
         )
         aggregated.insert(0, "item_no", range(1, len(aggregated) + 1))
