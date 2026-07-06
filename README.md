@@ -1,6 +1,30 @@
-# Steel Structure PDF BOM Reader
+# Steel Structure Drawing BOM Reader
 
-Extract a Bill of Materials (BOM) from steel structure PDF drawings and export it to Excel.
+Extract a Bill of Materials (BOM) from steel structure drawings and export it to Excel.
+
+## Supported inputs
+
+Reads **any** of these from the `input/` folder (mixed types are fine):
+
+- **Text PDF** — `pdfplumber` text/tables + vector-character mark recovery.
+- **Scanned / image PDF** — page images are OCR'd automatically.
+- **Image files** — `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.bmp`, `.webp` (OCR).
+- **CAD** — `.dxf` directly; `.dwg` via the ODA File Converter.
+
+Two engines are available (`--engine`):
+
+- `classic` (default) — pdfplumber + OpenCV/Tesseract OCR + geometry-based mark and
+  dimension recovery. Best for vector/text drawings.
+- `ai` — a vision LLM reads the drawing image holistically, including faint/rotated
+  text and printed schedule/quantity tables. Best for scanned drawings, image-only
+  files, and drawings whose BOM lives in graphic tables. Requires an API key
+  (`ANU_AI_API_KEY` / `OPENAI_API_KEY`; optional `ANU_AI_MODEL`, `ANU_AI_BASE_URL`).
+
+```bash
+python app.py                 # all inputs, classic engine
+python app.py --engine ai     # vision-LLM engine (needs API key)
+python app.py --file scan.png # a single image / pdf / dxf
+```
 
 ## Requirements
 
@@ -28,11 +52,16 @@ pip install -r requirements.txt
 ├── input/              # Place PDF drawings here
 ├── output/             # Generated Excel BOM files
 ├── src/
+│   ├── input_reader.py     # Unified reader: PDF / image / DXF·DWG
 │   ├── pdf_reader.py       # PDF text/table extraction (pdfplumber)
-│   ├── image_processor.py    # Image preprocessing (OpenCV)
-│   ├── ocr.py                # OCR for scanned drawings (pytesseract)
-│   ├── bom_parser.py         # Steel member parsing (pandas)
-│   └── excel_exporter.py     # Excel output
+│   ├── image_processor.py  # Image preprocessing (OpenCV)
+│   ├── ocr.py              # OCR for scanned drawings (pytesseract)
+│   ├── dimension_ocr.py    # Length recovery from dimension lines (OCR)
+│   ├── mark_recovery.py    # Recover rotated/stacked marks from geometry
+│   ├── ai_reader.py        # Vision-LLM engine (--engine ai)
+│   ├── sections.py         # Section unit-weight catalogue
+│   ├── bom_parser.py       # Steel member parsing (pandas)
+│   └── excel_exporter.py   # Excel output
 └── requirements.txt
 ```
 

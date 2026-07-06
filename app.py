@@ -12,8 +12,8 @@ from pathlib import Path
 from src.bom_parser import BOMParser
 from src.dimension_ocr import DimensionEstimator
 from src.excel_exporter import ExcelExporter
+from src.input_reader import SUPPORTED_SUFFIXES, read_drawing
 from src.ocr import OCREngine
-from src.pdf_reader import PDFReader
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 INPUT_DIR = PROJECT_ROOT / "input"
@@ -31,17 +31,23 @@ def setup_logging(verbose: bool) -> None:
     )
 
 
-def find_pdf_files(input_dir: Path, pdf_name: str | None) -> list[Path]:
-    if pdf_name:
-        pdf_path = input_dir / pdf_name
-        if not pdf_path.exists():
-            raise FileNotFoundError(f"PDF not found: {pdf_path}")
-        return [pdf_path]
+def find_inputs(input_dir: Path, single_name: str | None) -> list[Path]:
+    if single_name:
+        path = input_dir / single_name
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        return [path]
 
-    pdfs = sorted(input_dir.glob("*.pdf"))
-    if not pdfs:
-        raise FileNotFoundError(f"No PDF files found in {input_dir}")
-    return pdfs
+    files = sorted(
+        p
+        for p in input_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in SUPPORTED_SUFFIXES
+    )
+    if not files:
+        raise FileNotFoundError(
+            f"No supported drawings (PDF/image/DWG/DXF) found in {input_dir}"
+        )
+    return files
 
 
 def enrich_pages_with_ocr(pages: list, ocr: OCREngine) -> None:
@@ -56,55 +62,58 @@ def enrich_pages_with_ocr(pages: list, ocr: OCREngine) -> None:
         page.text = f"{page.text}\n{ocr_text}".strip()
 
 
-def process_pdf(
-    pdf_path: Path,
+def process_drawing(
+    path: Path,
     output_dir: Path,
     use_ocr: bool,
     length_overrides: dict | None = None,
+    ai_reader=None,
 ) -> Path:
-    logging.info("Processing %s", pdf_path.name)
-    reader = PDFReader(pdf_path)
-    pages = reader.read()
-
-    mark_lengths: dict = {}
-    page_default_lengths: dict = {}
-    if use_ocr:
-        ocr = OCREngine()
-        enrich_pages_with_ocr(pages, ocr)
-
-        # Recover member lengths from drawing dimension lines via OCR.
-        estimator = DimensionEstimator()
-        mark_lengths, page_default_lengths = estimator.estimate(pages)
-        if mark_lengths:
-            logging.info("Estimated lengths for %s marks from dimensions", len(mark_lengths))
-
+    logging.info("Processing %s", path.name)
     parser = BOMParser()
-    bom_df = parser.parse_pages(
-        pages, mark_lengths, page_default_lengths, length_overrides
-    )
 
-    output_name = f"{pdf_path.stem}_BOM.xlsx"
-    output_path = output_dir / output_name
-    exporter = ExcelExporter()
-    exporter.export(bom_df, output_path)
+    if ai_reader is not None:
+        items = ai_reader.read(path)
+        bom_df = parser.dataframe_from_items(items)
+    else:
+        pages = read_drawing(path)
 
-    logging.info(
-        "Exported %s items to %s",
-        len(bom_df),
-        output_path,
-    )
+        mark_lengths: dict = {}
+        page_default_lengths: dict = {}
+        if use_ocr:
+            ocr = OCREngine()
+            enrich_pages_with_ocr(pages, ocr)
+
+            # Recover member lengths from drawing dimension lines via OCR.
+            estimator = DimensionEstimator()
+            mark_lengths, page_default_lengths = estimator.estimate(pages)
+            if mark_lengths:
+                logging.info(
+                    "Estimated lengths for %s marks from dimensions", len(mark_lengths)
+                )
+
+        bom_df = parser.parse_pages(
+            pages, mark_lengths, page_default_lengths, length_overrides
+        )
+
+    output_path = output_dir / f"{path.stem}_BOM.xlsx"
+    ExcelExporter().export(bom_df, output_path)
+    logging.info("Exported %s items to %s", len(bom_df), output_path)
     return output_path
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Extract Bill of Materials from steel structure PDF drawings.",
+        description=(
+            "Extract a Bill of Materials from steel structure drawings "
+            "(PDF, scanned/image PDF, image files, or DWG/DXF)."
+        ),
     )
     parser.add_argument(
         "--input-dir",
         type=Path,
         default=INPUT_DIR,
-        help=f"Directory containing PDF files (default: {INPUT_DIR})",
+        help=f"Directory containing drawings (default: {INPUT_DIR})",
     )
     parser.add_argument(
         "--output-dir",
@@ -113,10 +122,18 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Directory for Excel output (default: {OUTPUT_DIR})",
     )
     parser.add_argument(
+        "--file",
         "--pdf",
+        dest="file",
         type=str,
         default=None,
-        help="Process a single PDF file from the input directory",
+        help="Process a single file (PDF/image/DWG/DXF) from the input directory",
+    )
+    parser.add_argument(
+        "--engine",
+        choices=["classic", "ai"],
+        default="classic",
+        help="Extraction engine: 'classic' (pdfplumber/OCR) or 'ai' (vision LLM)",
     )
     parser.add_argument(
         "--no-ocr",
@@ -163,23 +180,38 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging(args.verbose)
 
     try:
-        pdf_files = find_pdf_files(args.input_dir, args.pdf)
+        input_files = find_inputs(args.input_dir, args.file)
     except FileNotFoundError as exc:
         logging.error("%s", exc)
         return 1
+
+    ai_reader = None
+    if args.engine == "ai":
+        from src.ai_reader import VisionAIReader
+
+        ai_reader = VisionAIReader()
+        if not ai_reader.available():
+            logging.error(
+                "AI engine selected but no API key found. "
+                "Set ANU_AI_API_KEY (or OPENAI_API_KEY). See README."
+            )
+            return 2
+        logging.info("Using AI vision engine: model=%s", ai_reader.model)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     use_ocr = not args.no_ocr
     length_overrides = load_length_overrides(args.input_dir, args.lengths_file)
     output_files: list[Path] = []
 
-    for pdf_path in pdf_files:
+    for path in input_files:
         try:
             output_files.append(
-                process_pdf(pdf_path, args.output_dir, use_ocr, length_overrides)
+                process_drawing(
+                    path, args.output_dir, use_ocr, length_overrides, ai_reader
+                )
             )
         except Exception:
-            logging.exception("Failed to process %s", pdf_path.name)
+            logging.exception("Failed to process %s", path.name)
             return 1
 
     for path in output_files:

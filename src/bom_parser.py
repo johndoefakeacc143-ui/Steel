@@ -156,6 +156,10 @@ class BOMParser:
                         )
                     )
 
+        return self.dataframe_from_items(items)
+
+    def dataframe_from_items(self, items: list[BOMItem]) -> pd.DataFrame:
+        """Build the aggregated BOM DataFrame from a list of items."""
         if not items:
             return self._empty_dataframe()
 

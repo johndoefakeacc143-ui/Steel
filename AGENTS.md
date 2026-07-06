@@ -2,9 +2,13 @@
 
 ## Cursor Cloud specific instructions
 
-Steel Structure PDF BOM Reader — a single Python CLI (`app.py`) that extracts a
-Bill of Materials from steel-structure PDF drawings and writes an Excel file to
-`output/<name>_BOM.xlsx`. See `README.md` for full usage and column reference.
+Steel Structure Drawing BOM Reader — a single Python CLI (`app.py`) that extracts a
+Bill of Materials from steel-structure drawings and writes an Excel file to
+`output/<name>_BOM.xlsx`. It reads **PDF, scanned/image PDF, image files
+(png/jpg/tiff/bmp/webp), and DXF/DWG** via `src/input_reader.py`, and has two
+engines: `classic` (default; pdfplumber + OCR + geometry recovery) and `ai`
+(`--engine ai`, a vision LLM needing `ANU_AI_API_KEY`/`OPENAI_API_KEY`). See
+`README.md` for full usage and column reference.
 
 ### Environment
 - Python dependencies are installed into a project virtualenv at `.venv`.
@@ -14,8 +18,9 @@ Bill of Materials from steel-structure PDF drawings and writes an Excel file to
   update script. Tesseract is only exercised for pages with little embedded text.
 
 ### Running
-- Process every PDF in `input/`: `.venv/bin/python app.py`
-- Process one file: `.venv/bin/python app.py --pdf ABC.pdf`
+- Process every drawing in `input/`: `.venv/bin/python app.py`
+- Process one file: `.venv/bin/python app.py --file ABC.pdf` (`--pdf` still accepted)
+- Vision-LLM engine: `.venv/bin/python app.py --engine ai` (needs an API key)
 - Skip OCR fallback: `.venv/bin/python app.py --no-ocr`
 - Do NOT use `-v`/`--verbose` for routine runs: it enables pdfminer DEBUG logging
   that floods the terminal with thousands of low-value lines.
