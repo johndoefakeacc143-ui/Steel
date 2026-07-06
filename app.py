@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -55,7 +56,12 @@ def enrich_pages_with_ocr(pages: list, ocr: OCREngine) -> None:
         page.text = f"{page.text}\n{ocr_text}".strip()
 
 
-def process_pdf(pdf_path: Path, output_dir: Path, use_ocr: bool) -> Path:
+def process_pdf(
+    pdf_path: Path,
+    output_dir: Path,
+    use_ocr: bool,
+    length_overrides: dict | None = None,
+) -> Path:
     logging.info("Processing %s", pdf_path.name)
     reader = PDFReader(pdf_path)
     pages = reader.read()
@@ -73,7 +79,9 @@ def process_pdf(pdf_path: Path, output_dir: Path, use_ocr: bool) -> Path:
             logging.info("Estimated lengths for %s marks from dimensions", len(mark_lengths))
 
     parser = BOMParser()
-    bom_df = parser.parse_pages(pages, mark_lengths, page_default_lengths)
+    bom_df = parser.parse_pages(
+        pages, mark_lengths, page_default_lengths, length_overrides
+    )
 
     output_name = f"{pdf_path.stem}_BOM.xlsx"
     output_path = output_dir / output_name
@@ -116,12 +124,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable OCR fallback for image-based pages",
     )
     parser.add_argument(
+        "--lengths-file",
+        type=Path,
+        default=None,
+        help=(
+            "JSON file of authoritative {mark: length_mm} overrides. "
+            f"Defaults to {INPUT_DIR / 'member_lengths.json'} if present."
+        ),
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
         help="Enable debug logging",
     )
     return parser
+
+
+def load_length_overrides(input_dir: Path, lengths_file: Path | None) -> dict[str, float]:
+    """Load authoritative per-mark length overrides from JSON, if available."""
+    path = lengths_file or (input_dir / "member_lengths.json")
+    if not path.exists():
+        return {}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        overrides = {str(k): float(v) for k, v in data.items()}
+        logging.info("Loaded %d length override(s) from %s", len(overrides), path)
+        return overrides
+    except (OSError, ValueError) as exc:
+        logging.warning("Could not read length overrides from %s: %s", path, exc)
+        return {}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -136,11 +169,14 @@ def main(argv: list[str] | None = None) -> int:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     use_ocr = not args.no_ocr
+    length_overrides = load_length_overrides(args.input_dir, args.lengths_file)
     output_files: list[Path] = []
 
     for pdf_path in pdf_files:
         try:
-            output_files.append(process_pdf(pdf_path, args.output_dir, use_ocr))
+            output_files.append(
+                process_pdf(pdf_path, args.output_dir, use_ocr, length_overrides)
+            )
         except Exception:
             logging.exception("Failed to process %s", pdf_path.name)
             return 1

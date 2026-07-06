@@ -95,3 +95,20 @@ For example, in `ABC.pdf` this recovers `Length = 2000` for beams such as `B7`.
 These lengths are OCR-based estimates from the drawing geometry; base plates (`BP*`)
 and plan-bay references (`PB*`) are not assigned a length. Use `--no-ocr` to disable
 this (lengths then stay blank unless present in a table or text).
+
+### Authoritative length overrides
+
+Proximity-based estimation can pick the wrong dimension for a member (for example a
+horizontal beam whose label sits next to the perpendicular bay dimension). To set
+exact, authoritative lengths, provide a JSON map of `mark -> length_mm`. By default
+the app reads `input/member_lengths.json` (or pass `--lengths-file path.json`):
+
+```json
+{
+  "B4": 6000,
+  "B7": 2000
+}
+```
+
+Overrides take priority over every estimate. Marks not listed keep their
+OCR/estimated length.

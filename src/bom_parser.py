@@ -87,10 +87,15 @@ class BOMParser:
         pages: list,
         mark_lengths: dict[tuple[int, str], float] | None = None,
         page_default_lengths: dict[int, float] | None = None,
+        length_overrides: dict[str, float] | None = None,
     ) -> pd.DataFrame:
         items: list[BOMItem] = []
         mark_lengths = mark_lengths or {}
         page_default_lengths = page_default_lengths or {}
+        # Authoritative user-supplied lengths (highest priority), keyed by mark.
+        overrides = {
+            self._normalize_mark(k): float(v) for k, v in (length_overrides or {}).items()
+        }
 
         for page in pages:
             items.extend(self._parse_bom_tables(page.tables, page.page_number))
@@ -111,6 +116,11 @@ class BOMParser:
                     page_default_lengths.get(page.page_number),
                 )
             )
+
+        if overrides:
+            for item in items:
+                if item.mark in overrides:
+                    item.length = overrides[item.mark]
 
         if not items:
             return self._empty_dataframe()
