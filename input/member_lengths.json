@@ -1,3 +1,8 @@
 {
-  "B4": 6000
+  "B4": 6000,
+  "B3": [
+    { "length": 6000, "quantity": 2 },
+    { "length": 2000, "quantity": 8 },
+    { "length": 1500, "quantity": 4 }
+  ]
 }

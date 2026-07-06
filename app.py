@@ -149,7 +149,8 @@ def load_length_overrides(input_dir: Path, lengths_file: Path | None) -> dict[st
     try:
         with open(path, encoding="utf-8") as handle:
             data = json.load(handle)
-        overrides = {str(k): float(v) for k, v in data.items()}
+        # Values are either a scalar length (mm) or a list of length groups.
+        overrides = {str(k): v for k, v in data.items()}
         logging.info("Loaded %d length override(s) from %s", len(overrides), path)
         return overrides
     except (OSError, ValueError) as exc:

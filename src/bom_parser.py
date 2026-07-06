@@ -93,9 +93,25 @@ class BOMParser:
         mark_lengths = mark_lengths or {}
         page_default_lengths = page_default_lengths or {}
         # Authoritative user-supplied lengths (highest priority), keyed by mark.
-        overrides = {
-            self._normalize_mark(k): float(v) for k, v in (length_overrides or {}).items()
-        }
+        # A value may be a scalar length (applies to all of that mark) or a list of
+        # {"length": mm, "quantity": n} groups to split the mark by length.
+        scalar_overrides: dict[str, float] = {}
+        group_overrides: dict[str, list[tuple[float | None, int]]] = {}
+        for key, value in (length_overrides or {}).items():
+            mark = self._normalize_mark(key)
+            if isinstance(value, list):
+                groups: list[tuple[float | None, int]] = []
+                for entry in value:
+                    length = entry.get("length")
+                    groups.append(
+                        (
+                            float(length) if length is not None else None,
+                            int(entry.get("quantity", 1)),
+                        )
+                    )
+                group_overrides[mark] = groups
+            else:
+                scalar_overrides[mark] = float(value)
 
         for page in pages:
             items.extend(self._parse_bom_tables(page.tables, page.page_number))
@@ -117,10 +133,28 @@ class BOMParser:
                 )
             )
 
-        if overrides:
+        if scalar_overrides:
             for item in items:
-                if item.mark in overrides:
-                    item.length = overrides[item.mark]
+                if item.mark in scalar_overrides:
+                    item.length = scalar_overrides[item.mark]
+
+        if group_overrides:
+            # Replace all auto-detected rows for a grouped mark with the
+            # user-specified length groups.
+            items = [item for item in items if item.mark not in group_overrides]
+            for mark, groups in group_overrides.items():
+                description = self._describe_mark(mark)
+                for length, quantity in groups:
+                    items.append(
+                        BOMItem(
+                            mark=mark,
+                            description=description,
+                            quantity=quantity,
+                            length=length,
+                            grade="",
+                            source_page=None,
+                        )
+                    )
 
         if not items:
             return self._empty_dataframe()

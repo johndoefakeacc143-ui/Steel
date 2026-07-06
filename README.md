@@ -110,5 +110,20 @@ the app reads `input/member_lengths.json` (or pass `--lengths-file path.json`):
 }
 ```
 
-Overrides take priority over every estimate. Marks not listed keep their
-OCR/estimated length.
+A mark that exists at **several lengths** (e.g. the same beam mark used both as a
+short vertical and a long horizontal member) can be split into groups. Each group
+becomes its own BOM row:
+
+```json
+{
+  "B3": [
+    { "length": 6000, "quantity": 2 },
+    { "length": 2000, "quantity": 8 },
+    { "length": 1500, "quantity": 4 }
+  ]
+}
+```
+
+Overrides take priority over every estimate. A scalar value sets one length for all
+of that mark; a list replaces the auto-detected rows with the listed groups. Marks
+not listed keep their OCR/estimated length.
