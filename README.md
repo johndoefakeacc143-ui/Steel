@@ -7,7 +7,9 @@ Professional full-stack app that reads steel structure engineering PDF drawings 
 - Upload large PDFs (up to **500 MB**), processed **page by page**
 - Auto-detects **digital vs scanned** pages; scanned pages use OpenCV preprocessing + Tesseract OCR
 - Regex + optional OpenAI (LangChain) extraction for marks, sections, lengths, elevations, materials, base plates
-- Excel output with 4 sheets: `Beams`, `Columns`, `BasePlates`, `Summary`
+- **Along-beam lengths** on plan sheets: reads dimension text written in the same direction as the member (e.g. B3=1500, B8=6000)
+- **Diagonal bracing/columns** (e.g. BR1): length from the triangle formula `L = √(a² + b²)` using the two bay legs
+- Excel output with sheets: `Beams`, `Columns`, `BasePlates`, `Bracing`, `Summary`
 - React UI: drag-and-drop upload → progress screen → results preview + download
 
 ## Folder structure
@@ -144,6 +146,29 @@ Key variables:
 2. **Choose pages** — pick which pages are Plan (beams/bracing) and which are Elevation (columns)
 3. **Loading** — progress bar: “AI is reading your drawing…”
 4. **Results** — Plan metrics + Elevation metrics, table tabs + **Download Excel**
+
+## Plan length rules
+
+On GA / framing **Plan** sheets, member length is often a dimension written
+**along the beam** (same direction as the member), not `Length=` schedule text:
+
+| Mark | Example length |
+|------|----------------|
+| B3   | 1500 mm        |
+| B8   | 6000 mm (each span) |
+| B7   | 2000 mm        |
+| B4   | 6000 mm        |
+
+For **diagonally placed** bracing or members (e.g. **BR1**), length is the
+triangle / Pythagorean diagonal of the two bay legs:
+
+```text
+L = √(a² + b²)
+```
+
+Example: 45° brace in a 6000 × 6000 mm bay → `L = 6000√2 ≈ 8485.3 mm`.
+
+The Excel `Length Note` column shows the formula used (e.g. `√(6000² + 6000²)`).
 
 ## Notes
 

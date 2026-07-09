@@ -582,8 +582,26 @@ function ResultsScreen({ result, onReset, onDownload }) {
     [result]
   );
 
-  const beamCols = ["Mark", "Section Size", "Length", "Material", "Start EL", "End EL", "Page"];
-  const braceCols = ["Mark", "Section Size", "Length", "Material", "Page"];
+  const beamCols = [
+    "Mark",
+    "Section Size",
+    "Length",
+    "Length Note",
+    "Length Source",
+    "Material",
+    "Start EL",
+    "End EL",
+    "Page",
+  ];
+  const braceCols = [
+    "Mark",
+    "Section Size",
+    "Length",
+    "Length Note",
+    "Length Source",
+    "Material",
+    "Page",
+  ];
   const colCols = [
     "Mark",
     "Section Size",

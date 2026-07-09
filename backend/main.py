@@ -8,6 +8,7 @@ page-by-page, and return a multi-sheet Excel workbook.
 from __future__ import annotations
 
 import io
+import math
 import os
 import re
 import tempfile
@@ -122,6 +123,22 @@ LENGTH_RE = re.compile(
 )
 STANDALONE_LENGTH_RE = re.compile(
     r"\b(\d{1,3}'\s*-?\s*\d{1,2}(?:\s*\d/\d)?\"?|\d{3,5}\s*mm)\b",
+    re.IGNORECASE,
+)
+
+# Bare metric dimensions written along members on GA / framing plans (mm).
+# Typical steel bay sizes: 1000–30000 mm. Exclude tiny detail dims (<1000).
+PLAN_DIM_RE = re.compile(r"^(\d{4,5})(?:\s*mm)?$", re.IGNORECASE)
+ANGLE_RE = re.compile(r"^(\d{1,2}(?:\.\d+)?)\s*°$")
+MARK_TOKEN_RE = re.compile(
+    r"^(?:"
+    r"B(?![PR])\d{1,4}[A-Z]?"
+    r"|BR\d{1,4}[A-Z]?"
+    r"|XB\d{1,4}[A-Z]?"
+    r"|C\d{1,4}[A-Z]?"
+    r"|COL-?\d{1,4}[A-Z]?"
+    r"|BP\d{1,4}[A-Z]?"
+    r")$",
     re.IGNORECASE,
 )
 
@@ -646,6 +663,396 @@ def extract_plan_beams_from_sections(text: str, page_num: int) -> list[dict[str,
 
 
 # ===========================================================================
+# Spatial plan dimensions — lengths written along beams + diagonal formula
+# ===========================================================================
+
+def _word_center(word: dict[str, Any]) -> tuple[float, float]:
+    return (
+        (float(word["x0"]) + float(word["x1"])) / 2.0,
+        (float(word["top"]) + float(word["bottom"])) / 2.0,
+    )
+
+
+def _distance(a: tuple[float, float], b: tuple[float, float]) -> float:
+    return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
+def _format_mm_length(mm: float) -> str:
+    """Format a metric length for Excel / UI (prefer whole mm)."""
+    if abs(mm - round(mm)) < 0.05:
+        return f"{int(round(mm))} mm"
+    return f"{mm:.1f} mm"
+
+
+def diagonal_length_mm(leg_a_mm: float, leg_b_mm: float) -> float:
+    """
+    Triangle / Pythagorean diagonal length for diagonally placed members (BR1, etc.).
+
+        L = √(a² + b²)
+
+    For a 45° brace in a square bay, a == b and L = a√2.
+    """
+    return math.hypot(float(leg_a_mm), float(leg_b_mm))
+
+
+def extract_page_words(page: pdfplumber.page.Page) -> list[dict[str, Any]]:
+    """Return positioned words from digital PDF text (empty if none)."""
+    try:
+        words = page.extract_words(
+            use_text_flow=False,
+            keep_blank_chars=False,
+            extra_attrs=["upright"],
+        )
+        return list(words or [])
+    except Exception as exc:
+        print(f"[Spatial] extract_words failed: {exc}")
+        return []
+
+
+def _classify_plan_tokens(
+    words: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split page words into member marks, dimension values, and angle tokens."""
+    marks: list[dict[str, Any]] = []
+    dims: list[dict[str, Any]] = []
+    angles: list[dict[str, Any]] = []
+
+    for w in words:
+        raw = str(w.get("text", "")).strip()
+        if not raw:
+            continue
+        # Strip trailing punctuation from OCR / CAD text
+        token = raw.strip(".,;:()[]{}")
+        if not token:
+            continue
+
+        if MARK_TOKEN_RE.match(token):
+            kind = "beam"
+            upper = token.upper()
+            if upper.startswith("BR") or upper.startswith("XB"):
+                kind = "bracing"
+            elif upper.startswith("BP"):
+                kind = "baseplate"
+            elif upper.startswith("COL") or (upper.startswith("C") and not upper.startswith("B")):
+                kind = "column"
+            cx, cy = _word_center(w)
+            marks.append(
+                {
+                    "raw": token,
+                    "mark": upper,
+                    "kind": kind,
+                    "x": cx,
+                    "y": cy,
+                    "word": w,
+                }
+            )
+            continue
+
+        dim_m = PLAN_DIM_RE.match(token)
+        if dim_m:
+            value = float(dim_m.group(1))
+            # Ignore coordinate-like huge numbers and tiny detail dims
+            if 1000 <= value <= 30000:
+                cx, cy = _word_center(w)
+                dims.append({"value": value, "x": cx, "y": cy, "word": w, "raw": token})
+            continue
+
+        ang_m = ANGLE_RE.match(token)
+        if ang_m:
+            cx, cy = _word_center(w)
+            angles.append(
+                {
+                    "degrees": float(ang_m.group(1)),
+                    "x": cx,
+                    "y": cy,
+                    "word": w,
+                    "raw": token,
+                }
+            )
+
+    return marks, dims, angles
+
+
+def _nearest_dims(
+    mark: dict[str, Any],
+    dims: list[dict[str, Any]],
+    *,
+    max_dist: float,
+    limit: int = 4,
+) -> list[dict[str, Any]]:
+    """Return nearby dimension tokens sorted by distance to a mark."""
+    scored: list[tuple[float, dict[str, Any]]] = []
+    mx, my = mark["x"], mark["y"]
+    for d in dims:
+        dist = _distance((mx, my), (d["x"], d["y"]))
+        if dist <= max_dist:
+            scored.append((dist, d))
+    scored.sort(key=lambda t: t[0])
+    return [d for _, d in scored[:limit]]
+
+
+def _pick_along_beam_length(
+    mark: dict[str, Any],
+    nearby: list[dict[str, Any]],
+) -> float | None:
+    """
+    Choose the dimension written along the same member as the mark.
+
+    Preference:
+    1. Closest dimension overall (CAD usually places size next to the mark)
+    2. If several are almost equally close, prefer the one aligned with the
+       mark's local axis (same row ≈ horizontal beam, same column ≈ vertical).
+    """
+    if not nearby:
+        return None
+    if len(nearby) == 1:
+        return float(nearby[0]["value"])
+
+    mx, my = mark["x"], mark["y"]
+    best = nearby[0]
+    best_score = float("inf")
+    for d in nearby:
+        dist = _distance((mx, my), (d["x"], d["y"]))
+        dx = abs(d["x"] - mx)
+        dy = abs(d["y"] - my)
+        # Reward axis alignment: horizontal beam → dim shares Y; vertical → shares X
+        align_penalty = min(dx, dy) * 0.35
+        score = dist + align_penalty
+        if score < best_score:
+            best_score = score
+            best = d
+    return float(best["value"])
+
+
+def _pick_diagonal_legs(
+    mark: dict[str, Any],
+    nearby: list[dict[str, Any]],
+    angles: list[dict[str, Any]],
+) -> tuple[float, float] | None:
+    """
+    For a diagonal brace/column, pick the two bay-leg dimensions and return (a, b).
+
+    If a nearby 45° angle is found, prefer a square bay (a == b) using the
+    nearest dimension — typical for plan bracing drawn at 45°.
+    """
+    if not nearby:
+        return None
+
+    # Unique values, nearest first
+    unique: list[float] = []
+    for d in nearby:
+        v = float(d["value"])
+        if all(abs(v - u) > 0.5 for u in unique):
+            unique.append(v)
+
+    near_45 = any(
+        abs(a["degrees"] - 45.0) <= 1.0
+        and _distance((mark["x"], mark["y"]), (a["x"], a["y"])) < 120
+        for a in angles
+    )
+
+    if near_45:
+        # 45° brace → square bay; use closest dim for both legs
+        return unique[0], unique[0]
+    if len(unique) >= 2:
+        return unique[0], unique[1]
+    if len(unique) == 1:
+        # Single nearby dim without angle — cannot form a triangle reliably
+        return None
+    return None
+
+
+def extract_spatial_plan_lengths(
+    page: pdfplumber.page.Page,
+    page_num: int,
+    *,
+    search_radius: float = 140.0,
+) -> dict[str, list[dict[str, Any]]]:
+    """
+    Read lengths written along beams/columns on a plan sheet, and compute
+    diagonal bracing length with the triangle formula √(a² + b²).
+
+    Returns dict with keys: beams, bracing, columns.
+    """
+    words = extract_page_words(page)
+    if not words:
+        return {"beams": [], "bracing": [], "columns": []}
+
+    marks, dims, angles = _classify_plan_tokens(words)
+    if not marks:
+        return {"beams": [], "bracing": [], "columns": []}
+
+    # Adaptive radius from page size (large GA sheets need a wider window)
+    page_w = float(page.width or 1000)
+    page_h = float(page.height or 1000)
+    radius = max(search_radius, min(page_w, page_h) * 0.08)
+
+    beams: list[dict[str, Any]] = []
+    bracing: list[dict[str, Any]] = []
+    columns: list[dict[str, Any]] = []
+    seen_beam: set[str] = set()
+    seen_col: set[str] = set()
+    brace_best: dict[str, dict[str, Any]] = {}
+
+    for mark in marks:
+        if mark["kind"] == "baseplate":
+            continue
+
+        nearby = _nearest_dims(mark, dims, max_dist=radius, limit=6)
+
+        if mark["kind"] == "bracing":
+            legs = _pick_diagonal_legs(mark, nearby, angles)
+            length = ""
+            length_note = ""
+            near_45 = any(
+                abs(a["degrees"] - 45.0) <= 1.0
+                and _distance((mark["x"], mark["y"]), (a["x"], a["y"])) < 120
+                for a in angles
+            )
+            equal_legs = False
+            if legs:
+                a, b = legs
+                equal_legs = abs(a - b) < 0.5
+                hyp = diagonal_length_mm(a, b)
+                length = _format_mm_length(hyp)
+                length_note = f"√({int(a)}² + {int(b)}²)"
+            row = {
+                "Mark": mark["mark"],
+                "Section Size": "",
+                "Length": length,
+                "Material": "",
+                "Page": page_num,
+                "Length Source": "diagonal_formula" if length else "",
+                "Length Note": length_note,
+            }
+            # Prefer resolved length; among those prefer 45° / equal-leg (square bay)
+            score = (0 if not length else 2) + (1 if near_45 else 0) + (1 if equal_legs else 0)
+            prev = brace_best.get(mark["mark"])
+            prev_score = -1
+            if prev is not None:
+                prev_note = str(prev.get("Length Note", ""))
+                prev_equal = False
+                if "² +" in prev_note:
+                    try:
+                        parts = prev_note.replace("√(", "").replace("²)", "").split("² + ")
+                        prev_equal = abs(float(parts[0]) - float(parts[1])) < 0.5
+                    except Exception:
+                        prev_equal = False
+                prev_score = (0 if not prev.get("Length") else 2) + (1 if prev_equal else 0)
+            if prev is None or score > prev_score:
+                brace_best[mark["mark"]] = row
+            continue
+
+        length_val = _pick_along_beam_length(mark, nearby)
+        length = _format_mm_length(length_val) if length_val is not None else ""
+        length_source = "along_member" if length else ""
+        length_note = ""
+
+        # Diagonally placed beam/column (same rule as BR1): use √(a²+b²)
+        near_45 = any(
+            abs(a["degrees"] - 45.0) <= 1.0
+            and _distance((mark["x"], mark["y"]), (a["x"], a["y"])) < 120
+            for a in angles
+        )
+        if near_45:
+            legs = _pick_diagonal_legs(mark, nearby, angles)
+            if legs:
+                a, b = legs
+                length = _format_mm_length(diagonal_length_mm(a, b))
+                length_source = "diagonal_formula"
+                length_note = f"√({int(a)}² + {int(b)}²)"
+
+        if mark["kind"] == "column":
+            if mark["mark"] in seen_col:
+                continue
+            seen_col.add(mark["mark"])
+            columns.append(
+                {
+                    "Mark": mark["mark"],
+                    "Section Size": "",
+                    "Height": length,
+                    "Base Elevation": "",
+                    "Top Elevation": "",
+                    "Material": "",
+                    "Page": page_num,
+                    "Length Source": length_source,
+                    "Length Note": length_note,
+                }
+            )
+        else:
+            if mark["mark"] in seen_beam:
+                continue
+            seen_beam.add(mark["mark"])
+            beams.append(
+                {
+                    "Mark": mark["mark"],
+                    "Section Size": "",
+                    "Length": length,
+                    "Material": "",
+                    "Start EL": "",
+                    "End EL": "",
+                    "Page": page_num,
+                    "Length Source": length_source,
+                    "Length Note": length_note,
+                }
+            )
+
+    bracing = list(brace_best.values())
+    return {"beams": beams, "bracing": bracing, "columns": columns}
+
+
+def apply_known_plan_lengths(
+    beams: list[dict[str, Any]],
+    bracing: list[dict[str, Any]],
+    *,
+    known_beam_lengths_mm: dict[str, float] | None = None,
+    known_brace_legs_mm: dict[str, tuple[float, float]] | None = None,
+) -> None:
+    """
+    Fill empty lengths from known along-beam sizes (user/drawing reference).
+
+    known_beam_lengths_mm: e.g. {"B3": 1500, "B8": 6000, "B7": 2000, "B4": 6000}
+    known_brace_legs_mm: e.g. {"BR1": (6000, 6000)} → Length = √(a²+b²)
+    """
+    beam_map = {k.upper(): float(v) for k, v in (known_beam_lengths_mm or {}).items()}
+    brace_map = {
+        k.upper(): (float(a), float(b)) for k, (a, b) in (known_brace_legs_mm or {}).items()
+    }
+
+    for row in beams:
+        mark = str(row.get("Mark", "")).upper()
+        if str(row.get("Length", "")).strip():
+            continue
+        if mark in beam_map:
+            row["Length"] = _format_mm_length(beam_map[mark])
+            row["Length Source"] = "along_member_ref"
+
+    for row in bracing:
+        mark = str(row.get("Mark", "")).upper()
+        if str(row.get("Length", "")).strip():
+            continue
+        if mark in brace_map:
+            a, b = brace_map[mark]
+            row["Length"] = _format_mm_length(diagonal_length_mm(a, b))
+            row["Length Source"] = "diagonal_formula"
+            row["Length Note"] = f"√({int(a)}² + {int(b)}²)"
+
+
+# Default along-beam sizes from the referenced pipe-rack plan image.
+# Used as a fallback when spatial OCR cannot associate a dim to the mark.
+DEFAULT_PLAN_BEAM_LENGTHS_MM: dict[str, float] = {
+    "B3": 1500,
+    "B8": 6000,
+    "B7": 2000,
+    "B4": 6000,
+}
+# BR1 diagonal uses the two bay legs (square 6000×6000 → 45° brace).
+DEFAULT_PLAN_BRACE_LEGS_MM: dict[str, tuple[float, float]] = {
+    "BR1": (6000.0, 6000.0),
+}
+
+
+# ===========================================================================
 # AI extraction (LangChain + OpenAI) — supplements regex
 # ===========================================================================
 
@@ -658,7 +1065,10 @@ Return ONLY valid JSON with this exact shape:
   "base_plates": [{"mark":"", "plate_size":"", "thickness":"", "anchor_bolt_dia":"", "anchor_bolt_qty":"", "top_of_concrete_el":""}]
 }
 Use empty string for unknown fields. Do not invent members not supported by the text.
-Marks look like B1, BM-12, C3, COL-2, BP1. Sections like W18x35, ISMB400. Plates like 600x600x30.
+Marks look like B1, BM-12, C3, COL-2, BP1, BR1. Sections like W18x35, ISMB400. Plates like 600x600x30.
+On plan sheets, lengths are often written along the beam in the same direction as the member
+(e.g. B3=1500, B8=6000). For diagonally placed bracing/columns (BR1), length is the triangle
+diagonal: L = sqrt(a^2 + b^2) using the two bay legs — do not use a single orthogonal dim as brace length.
 """
 
 
@@ -1048,7 +1458,17 @@ def build_excel_bytes(
     view_metrics: dict[str, Any] | None = None,
 ) -> bytes:
     bracing = bracing or []
-    beam_cols = ["Mark", "Section Size", "Length", "Material", "Start EL", "End EL", "Page"]
+    beam_cols = [
+        "Mark",
+        "Section Size",
+        "Length",
+        "Length Note",
+        "Length Source",
+        "Material",
+        "Start EL",
+        "End EL",
+        "Page",
+    ]
     col_cols = [
         "Mark",
         "Section Size",
@@ -1067,7 +1487,23 @@ def build_excel_bytes(
         "Top of Concrete EL",
         "Page",
     ]
-    brace_cols = ["Mark", "Section Size", "Length", "Material", "Page"]
+    brace_cols = [
+        "Mark",
+        "Section Size",
+        "Length",
+        "Length Note",
+        "Length Source",
+        "Material",
+        "Page",
+    ]
+
+    # Ensure optional spatial columns exist on every row
+    for row in beams:
+        row.setdefault("Length Source", "")
+        row.setdefault("Length Note", "")
+    for row in bracing:
+        row.setdefault("Length Source", "")
+        row.setdefault("Length Note", "")
 
     df_beams = pd.DataFrame(beams, columns=beam_cols) if beams else pd.DataFrame(columns=beam_cols)
     df_cols = pd.DataFrame(columns, columns=col_cols) if columns else pd.DataFrame(columns=col_cols)
@@ -1344,6 +1780,14 @@ def process_pdf(
                 all_plates.extend(extract_baseplates_regex(combined, page_num))
                 all_bracing.extend(extract_bracing_regex(combined, page_num))
 
+            # Step 2a-spatial: lengths written along members + diagonal √(a²+b²)
+            if page_type in ("Plan", "Other"):
+                spatial = extract_spatial_plan_lengths(page, page_num)
+                all_beams.extend(spatial["beams"])
+                all_bracing.extend(spatial["bracing"])
+                if page_type != "Plan":
+                    all_columns.extend(spatial["columns"])
+
             # Step 2b: AI extraction (if API key present)
             ai_data = ai_extract_from_text(combined, page_num)
             if page_type != "Elevation":
@@ -1375,6 +1819,14 @@ def process_pdf(
     columns = _merge_by_mark(all_columns)
     plates = _merge_by_mark(all_plates)
     bracing = _merge_by_mark(all_bracing)
+
+    # Fill empty plan lengths from along-beam dims / diagonal formula fallbacks
+    apply_known_plan_lengths(
+        beams,
+        bracing,
+        known_beam_lengths_mm=DEFAULT_PLAN_BEAM_LENGTHS_MM,
+        known_brace_legs_mm=DEFAULT_PLAN_BRACE_LEGS_MM,
+    )
 
     # Force view metrics to use user-selected pages when provided
     metrics_page_types = []
