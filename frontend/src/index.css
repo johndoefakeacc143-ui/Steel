@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --steel-ink: #1a2229;
+  --steel-mid: #3f5a6f;
+  --ember: #c45f22;
+  --paper: #eef2f5;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--steel-ink);
+  background:
+    radial-gradient(ellipse 90% 60% at 10% -10%, rgba(196, 95, 34, 0.14), transparent 55%),
+    radial-gradient(ellipse 70% 50% at 100% 0%, rgba(79, 112, 136, 0.18), transparent 50%),
+    linear-gradient(165deg, #eef2f5 0%, #d8e2ea 45%, #c9d6e0 100%);
+  font-family: "Source Sans 3", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Blueprint grid atmosphere behind the composition */
+.app-shell {
+  background-image:
+    linear-gradient(rgba(42, 54, 66, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(42, 54, 66, 0.045) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #6b8ba3;
+  border-radius: 6px;
+}
