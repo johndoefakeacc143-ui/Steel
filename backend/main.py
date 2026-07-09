@@ -2234,11 +2234,53 @@ def _expand_quantity_rows(
     return expanded
 
 
+def _ai_console(msg: str = "", *, flush: bool = True) -> None:
+    """Print AI debug lines to the uvicorn console (flush so Windows CMD shows them)."""
+    print(msg, flush=flush)
+
+
+def _ai_content_to_text(content: Any) -> str:
+    """Normalize LangChain / Gemini response content to a plain string."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    # Gemini / some LangChain wrappers return a list of content blocks
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                parts.append(str(block.get("text") or block.get("content") or block))
+            else:
+                text_attr = getattr(block, "text", None) or getattr(block, "content", None)
+                parts.append(str(text_attr if text_attr is not None else block))
+        return "\n".join(parts)
+    return str(content)
+
+
+def _print_ai_raw(title: str, content: str) -> None:
+    """Always dump the full AI return to the console for debugging."""
+    body = content if content is not None else ""
+    _ai_console("")
+    _ai_console("=" * 72)
+    _ai_console(f">>> {title}")
+    _ai_console("=" * 72)
+    if not str(body).strip():
+        _ai_console("(empty AI response)")
+    else:
+        _ai_console(str(body))
+    _ai_console("=" * 72)
+    _ai_console(f">>> END {title} ({len(str(body))} chars)")
+    _ai_console("")
+
+
 def ai_extract_from_text(text: str, page_no: int) -> dict[str, list[dict]]:
     """
     Call Gemini (preferred) or OpenAI via LangChain to enrich extraction.
     Returns empty lists if no API key or on failure — regex results still apply.
-    Prints the raw AI response to the console for debugging.
+    ALWAYS prints the raw AI response to the console (uvicorn terminal).
     """
     empty = {"beams": [], "columns": [], "base_plates": [], "bracings": [], "summary": {}}
     llm, provider, model_name = _get_chat_llm(temperature=0)
@@ -2251,7 +2293,7 @@ def ai_extract_from_text(text: str, page_no: int) -> dict[str, list[dict]]:
             )
         else:
             reason = "empty page text"
-        print(f"[AI extract] SKIPPED page {page_no} — {reason}")
+        _ai_console(f"[AI extract] SKIPPED page {page_no} — {reason}")
         return empty
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
@@ -2259,12 +2301,13 @@ def ai_extract_from_text(text: str, page_no: int) -> dict[str, list[dict]]:
 
         # Cap text to keep token usage reasonable on huge sheets
         clipped = text[:14000]
-        print(f"\n{'=' * 72}")
-        print(
+        _ai_console("")
+        _ai_console("=" * 72)
+        _ai_console(
             f"[AI extract] CALLING provider={provider} model={model_name} "
             f"page={page_no} chars={len(clipped)}"
         )
-        print(f"{'=' * 72}")
+        _ai_console("=" * 72)
         resp = llm.invoke(
             [
                 SystemMessage(content=AI_SYSTEM_PROMPT),
@@ -2276,13 +2319,10 @@ def ai_extract_from_text(text: str, page_no: int) -> dict[str, list[dict]]:
                 ),
             ]
         )
-        content = resp.content if isinstance(resp.content, str) else str(resp.content)
+        content = _ai_content_to_text(getattr(resp, "content", resp))
 
-        # --- Console dump: raw AI return ---
-        print(f"\n[AI extract] RAW RESPONSE page {page_no} ({len(content)} chars):")
-        print("-" * 72)
-        print(content)
-        print("-" * 72)
+        # --- Console dump: full raw AI return (what you asked to see) ---
+        _print_ai_raw(f"AI RAW RESPONSE — page {page_no}", content)
 
         # Strip optional ```json fences
         cleaned = re.sub(r"^```(?:json)?\s*", "", content.strip())
@@ -2301,17 +2341,21 @@ def ai_extract_from_text(text: str, page_no: int) -> dict[str, list[dict]]:
             "bracings": data.get("bracings") or data.get("bracing") or [],
             "summary": data.get("summary") or {},
         }
-        print(
+        _ai_console(
             f"[AI extract] PARSED page {page_no}: "
             f"beams={len(parsed['beams'])} columns={len(parsed['columns'])} "
             f"base_plates={len(parsed['base_plates'])} bracings={len(parsed['bracings'])}"
         )
-        print(f"[AI extract] PARSED JSON page {page_no}:")
-        print(json.dumps(parsed, indent=2, default=str))
-        print(f"{'=' * 72}\n")
+        _print_ai_raw(
+            f"AI PARSED JSON — page {page_no}",
+            json.dumps(parsed, indent=2, default=str),
+        )
         return parsed
     except Exception as exc:  # noqa: BLE001
-        print(f"[AI extract] ERROR page {page_no}: {exc}")
+        _ai_console(f"[AI extract] ERROR page {page_no}: {exc}")
+        import traceback
+
+        _ai_console(traceback.format_exc())
         return empty
 
 
@@ -2986,9 +3030,10 @@ def build_summary(
         try:
             from langchain_core.messages import HumanMessage, SystemMessage
 
-            print(f"\n{'=' * 72}")
-            print(f"[AI summary] CALLING provider={provider} model={model_name}")
-            print(f"{'=' * 72}")
+            _ai_console("")
+            _ai_console("=" * 72)
+            _ai_console(f"[AI summary] CALLING provider={provider} model={model_name}")
+            _ai_console("=" * 72)
             polish = llm.invoke(
                 [
                     SystemMessage(
@@ -3003,19 +3048,17 @@ def build_summary(
                     HumanMessage(content=engineer_notes[:8000]),
                 ]
             )
-            polished = polish.content if isinstance(polish.content, str) else str(polish.content)
-            print(f"\n[AI summary] RAW RESPONSE ({len(polished)} chars):")
-            print("-" * 72)
-            print(polished)
-            print("-" * 72)
-            print(f"{'=' * 72}\n")
+            polished = _ai_content_to_text(getattr(polish, "content", polish))
+            _print_ai_raw("AI SUMMARY RAW RESPONSE", polished)
             if polished.strip():
                 engineer_notes = polished.strip()
         except Exception as exc:  # noqa: BLE001
-            print(f"[AI summary] ERROR: {exc}")
+            _ai_console(f"[AI summary] ERROR: {exc}")
+            import traceback
+            _ai_console(traceback.format_exc())
     else:
         st = _ai_provider_status()
-        print(
+        _ai_console(
             "[AI summary] SKIPPED — no AI key — "
             f"gemini={st['gemini']['configured']} openai={st['openai']['configured']}. "
             f"Edit {st['gemini']['root_env']} then restart uvicorn"
