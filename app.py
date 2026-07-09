@@ -29,6 +29,10 @@ def setup_logging(verbose: bool) -> None:
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%H:%M:%S",
     )
+    # These libraries emit thousands of DEBUG lines; keep them quiet so progress
+    # logging stays readable even with -v.
+    for noisy in ("pdfminer", "pdfplumber", "PIL"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 def find_inputs(input_dir: Path, single_name: str | None) -> list[Path]:
@@ -217,7 +221,10 @@ def main(argv: list[str] | None = None) -> int:
     length_overrides = load_length_overrides(args.input_dir, args.lengths_file)
     output_files: list[Path] = []
 
-    for path in input_files:
+    total = len(input_files)
+    logging.info("Found %d drawing(s) to process in %s", total, args.input_dir)
+    for index, path in enumerate(input_files, start=1):
+        logging.info("=== [%d/%d] %s ===", index, total, path.name)
         try:
             output_files.append(
                 process_drawing(
@@ -228,6 +235,7 @@ def main(argv: list[str] | None = None) -> int:
             logging.exception("Failed to process %s", path.name)
             return 1
 
+    logging.info("Done. Wrote %d BOM file(s).", len(output_files))
     for path in output_files:
         print(path)
     return 0

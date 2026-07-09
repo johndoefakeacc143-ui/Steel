@@ -64,10 +64,19 @@ class DimensionEstimator:
         mark_lengths: dict[tuple[int, str], float] = {}
         page_defaults: dict[int, float] = {}
 
-        for page in pages:
+        total = len(pages)
+        for index, page in enumerate(pages, start=1):
             image = getattr(page, "image", None)
             if image is None:
                 continue
+            logger.info(
+                "Reading dimensions via OCR on page %s/%s (image %sx%s) - this can "
+                "take ~10-40s per page on large drawings...",
+                index,
+                total,
+                image.shape[1],
+                image.shape[0],
+            )
             try:
                 per_mark, default = self._estimate_page(image)
             except Exception as exc:  # noqa: BLE001 - OCR must never abort a run
