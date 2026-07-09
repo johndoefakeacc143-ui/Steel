@@ -1,0 +1,28 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Generated takeoff exports
+generated_exports/
+*.xlsx
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
