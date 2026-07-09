@@ -427,10 +427,10 @@ MULTI_LENGTH_BEAM_WEIGHTS: dict[str, dict[float, int]] = {
 # Diagonal brace bay legs (a, b) → L = √(a²+b²). Edit per typical brace bay.
 # From the pipe-rack plan callouts (user-verified):
 #   BR1 spans 3000 (horizontal) × 1500 (vertical) → √(3000²+1500²) = 3354.10
-#   BR4 spans 100  (horizontal) × 2000 (vertical) → √(100²+2000²)  = 2002.50
+#   BR4 spans 1000 (horizontal) × 2000 (vertical) → √(1000²+2000²) = 2236.07
 DEFAULT_PLAN_BRACE_LEGS_MM: dict[str, tuple[float, float]] = {
     "BR1": (3000.0, 1500.0),
-    "BR4": (100.0, 2000.0),
+    "BR4": (1000.0, 2000.0),
 }
 
 # Explicit base / top elevation phrases on column schedules
@@ -1415,7 +1415,7 @@ def sanitize_member_lengths(
             raw_f = None
 
         # Known brace marks: ALWAYS use verified bay legs (ignore OCR mis-pairs).
-        # BR1 = √(3000²+1500²), BR4 = √(100²+2000²) — edit DEFAULT_PLAN_BRACE_LEGS_MM.
+        # BR1 = √(3000²+1500²), BR4 = √(1000²+2000²) — edit DEFAULT_PLAN_BRACE_LEGS_MM.
         if mark in DEFAULT_PLAN_BRACE_LEGS_MM:
             a, b = DEFAULT_PLAN_BRACE_LEGS_MM[mark]
             r["Length (mm)"] = round(triangle_diagonal_length(a, b), 2)
@@ -1524,7 +1524,7 @@ def expand_rows_to_mark_quantities(
             continue
 
         # Known diagonal braces → force √(a²+b²) × full quantity
-        # BR1 = √(3000²+1500²)=3354.10, BR4 = √(100²+2000²)=2002.50
+        # BR1 = √(3000²+1500²)=3354.10, BR4 = √(1000²+2000²)=2236.07
         if mark in DEFAULT_PLAN_BRACE_LEGS_MM and length_key == "Length (mm)":
             a, b = DEFAULT_PLAN_BRACE_LEGS_MM[mark]
             L = _format_length_display(round(triangle_diagonal_length(a, b), 2))
@@ -2215,7 +2215,7 @@ IMPORTANT RULES:
    horizontal dimension. Same mark at different lengths → separate rows.
 7. DIAGONAL RULE: for diagonal bracing/beams, L = sqrt(a^2 + b^2) from bay spans.
    Known pipe-rack braces: BR1 = sqrt(3000^2 + 1500^2) = 3354.10 mm;
-   BR4 = sqrt(100^2 + 2000^2) = 2002.50 mm.
+   BR4 = sqrt(1000^2 + 2000^2) = 2236.07 mm.
 8. Quantity must be an integer count of occurrences (not a guess of shipping qty).
 9. Return ONLY valid JSON.
 """
