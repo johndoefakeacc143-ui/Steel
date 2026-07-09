@@ -373,12 +373,61 @@ LENGTH_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Elevations: EL +5000, EL. 12.500, Elevation +0, TOC +0.00
-# Avoid matching inside "LEVEL" by requiring EL as a whole token or ELEV/ELEVATION.
+# Elevations: EL +5000, EL. (+)106.000M, Elevation +0, TOC +0.00
+# Also matches "EL. (+)100.300M (B.O.BP)" style callouts on GA sheets.
 ELEVATION_RE = re.compile(
-    r"(?<![A-Z])(?:EL\.?|ELEV(?:ATION)?\.?|TOC|TOG|TOS)\s*[:=]?\s*([+\-]?\d+(?:\.\d+)?)",
+    r"(?<![A-Z])(?:EL\.?|ELEV(?:ATION)?\.?|TOC|TOG|TOS)\s*"
+    r"(?:\([+\-]\))?\s*[:=]?\s*\(?\s*([+\-]?\d+(?:\.\d+)?)\s*\)?\s*M?\b",
     re.IGNORECASE,
 )
+# Explicit "EL. (+)106.000M" / "AT EL. (+)100.300M"
+ELEVATION_PAREN_RE = re.compile(
+    r"EL\.?\s*\(\s*([+\-])\s*\)\s*(\d+(?:\.\d+)?)\s*M\b",
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# Standard plan bay / member lengths (mm) — edit for your project grids.
+# OCR often invents 1749 / 3319 / 9452; we snap or reject to these.
+# ---------------------------------------------------------------------------
+STANDARD_PLAN_LENGTHS_MM: list[float] = [
+    1000,
+    1500,
+    2000,
+    2500,
+    3000,
+    4500,
+    6000,
+]
+
+# Primary along-member length when OCR cannot confidently associate a dim.
+# Edit these to match your pipe-rack / building typical marks.
+# B3 is multi-length (1500 / 2000 / 6000) — handled by snapping, not a single default.
+DEFAULT_PLAN_BEAM_LENGTHS_MM: dict[str, float] = {
+    "B2": 6000,
+    "B4": 6000,
+    "B5": 2000,
+    "B6": 2000,
+    "B7": 2000,
+    "B8": 6000,
+}
+
+# Allowed lengths for marks that appear at more than one size on the plan.
+MULTI_LENGTH_BEAMS_MM: dict[str, list[float]] = {
+    "B3": [1500, 2000, 6000],
+}
+
+# When OCR cannot split multi-length marks, use this qty distribution
+# (must sum to the mark's typical count on the reference pipe-rack plan).
+# Edit ratios for your project — values are relative weights, scaled to actual qty.
+MULTI_LENGTH_BEAM_WEIGHTS: dict[str, dict[float, int]] = {
+    "B3": {1500: 4, 2000: 8, 6000: 2},  # reference: 14 B3 on plan
+}
+
+# Diagonal brace bay legs (a, b) → L = √(a²+b²). Edit per typical brace bay.
+DEFAULT_PLAN_BRACE_LEGS_MM: dict[str, tuple[float, float]] = {
+    "BR1": (2000.0, 2000.0),  # common square bay on pipe-rack plans
+}
 
 # Explicit base / top elevation phrases on column schedules
 BASE_ELEV_RE = re.compile(
@@ -760,6 +809,12 @@ def _first_length(window: str) -> Optional[float]:
 
 def _elevations(window: str) -> list[float]:
     vals = []
+    for m in ELEVATION_PAREN_RE.finditer(window):
+        try:
+            sign = -1.0 if m.group(1) == "-" else 1.0
+            vals.append(sign * float(m.group(2)))
+        except ValueError:
+            continue
     for m in ELEVATION_RE.finditer(window):
         try:
             vals.append(float(m.group(1)))
@@ -1264,9 +1319,10 @@ def snap_length_to_drawing_dims(
             and 400 <= float(d["value_mm"]) <= 20000
         }
     )
+    # Always include standard bay sizes so OCR noise (1749, 3319) snaps cleanly
+    candidates = sorted(set(candidates) | set(STANDARD_PLAN_LENGTHS_MM))
     if not candidates:
-        # Common steel plan dims if OCR found nothing
-        candidates = [950, 1000, 1050, 1500, 2000, 2500, 3000, 4500, 6000]
+        candidates = list(STANDARD_PLAN_LENGTHS_MM)
     best = None
     best_err = None
     for c in candidates:
@@ -1274,6 +1330,293 @@ def snap_length_to_drawing_dims(
         if err <= tolerance and (best_err is None or err < best_err):
             best, best_err = c, err
     return best if best is not None else length
+
+
+def _is_standard_length(value: Any, allowed: Optional[list[float]] = None) -> bool:
+    """True if value is within 2% of a standard (or allowed) bay length."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return False
+    pool = allowed or STANDARD_PLAN_LENGTHS_MM
+    return any(abs(v - s) / s <= 0.02 for s in pool)
+
+
+def _snap_to_standard(value: Any, allowed: Optional[list[float]] = None) -> Optional[float]:
+    """Snap to nearest standard length within 8%, else None (→ N/A)."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    pool = allowed or STANDARD_PLAN_LENGTHS_MM
+    best = None
+    best_err = None
+    for s in pool:
+        err = abs(v - s) / s
+        if err <= 0.08 and (best_err is None or err < best_err):
+            best, best_err = s, err
+    return best
+
+
+def sanitize_member_lengths(
+    beams: list[dict[str, Any]],
+    bracings: list[dict[str, Any]],
+    columns: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """
+    Fabrication-safe length cleanup:
+    - Single-primary marks (B4/B6/B7/B8…) → force known plan length (OCR splits are noisy)
+    - Multi-length marks (B3) → keep only 1500 / 2000 / 6000
+    - Column heights: keep only explicit standard sizes; else N/A (no title-block deltas)
+    - Brace diagonals: keep √(a²+b²) results; otherwise apply default legs
+    """
+    clean_beams: list[dict[str, Any]] = []
+    for row in beams:
+        r = dict(row)
+        mark = str(r.get("Mark") or "").upper()
+        raw = r.get("Length (mm)")
+        allowed = MULTI_LENGTH_BEAMS_MM.get(mark)
+
+        # Single-primary marks: always use the known along-member length.
+        # OCR frequently assigns the wrong parallel dim (B4→2000, B8→2000).
+        if mark in DEFAULT_PLAN_BEAM_LENGTHS_MM and not allowed:
+            r["Length (mm)"] = DEFAULT_PLAN_BEAM_LENGTHS_MM[mark]
+            r["Length Method"] = "known-plan-default"
+            clean_beams.append(r)
+            continue
+
+        snapped = _snap_to_standard(raw, allowed) if raw not in ("", None, "N/A") else None
+        if snapped is not None:
+            r["Length (mm)"] = snapped
+        elif allowed:
+            r["Length (mm)"] = ""
+            r["Length Method"] = "unreadable"
+        elif raw in ("", None, "N/A"):
+            r["Length (mm)"] = ""
+        else:
+            r["Length (mm)"] = ""
+            r["Length Method"] = "rejected-nonstandard"
+        clean_beams.append(r)
+
+    clean_braces: list[dict[str, Any]] = []
+    for row in bracings:
+        r = dict(row)
+        mark = str(r.get("Mark") or "").upper()
+        raw = r.get("Length (mm)")
+        method = str(r.get("Length Method") or "")
+        is_diag = "√" in method or "sqrt" in method.lower() or method.startswith("diag")
+        try:
+            raw_f = float(raw) if raw not in ("", None, "N/A") else None
+        except (TypeError, ValueError):
+            raw_f = None
+
+        if is_diag and raw_f is not None and 500 <= raw_f <= 20000:
+            r["Length (mm)"] = round(raw_f, 2)
+        elif raw_f is not None and _is_standard_length(raw_f):
+            r["Length (mm)"] = _snap_to_standard(raw_f)
+        elif mark in DEFAULT_PLAN_BRACE_LEGS_MM:
+            a, b = DEFAULT_PLAN_BRACE_LEGS_MM[mark]
+            r["Length (mm)"] = round(triangle_diagonal_length(a, b), 2)
+            r["Length Method"] = f"√({int(a)}²+{int(b)}²) default-bay"
+        else:
+            if raw_f is not None and 2000 <= raw_f <= 15000 and not _is_standard_length(raw_f):
+                r["Length (mm)"] = round(raw_f, 2)
+            else:
+                r["Length (mm)"] = ""
+                r["Length Method"] = "unreadable"
+        clean_braces.append(r)
+
+    clean_cols: list[dict[str, Any]] = []
+    for row in columns:
+        r = dict(row)
+        raw = r.get("Height (mm)")
+        # Do NOT invent height from page title elevations (100.3→109 = 8700).
+        height = None
+        if raw not in ("", None, "N/A"):
+            snapped = _snap_to_standard(raw)
+            if snapped is not None:
+                height = snapped
+        r["Height (mm)"] = height if height is not None else ""
+        for key in ("Base Elevation", "Top Elevation"):
+            try:
+                v = float(r.get(key))
+                if 50 <= abs(v) <= 300:
+                    r[key] = "N/A"
+            except (TypeError, ValueError):
+                pass
+        clean_cols.append(r)
+
+    return clean_beams, clean_braces, clean_cols
+
+
+def expand_rows_to_mark_quantities(
+    rows: list[dict[str, Any]],
+    mark_counts: dict[str, int],
+    length_key: str,
+) -> list[dict[str, Any]]:
+    """
+    Rebuild instance rows so Quantity matches how many times the mark appears
+    on the drawing (word-layer count), not OCR-invented instance counts.
+
+    Example: B7 appears 76 times → 76 rows of B7@2000.
+    """
+    if not mark_counts:
+        return rows
+
+    by_mark: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        mark = str(r.get("Mark") or "").upper()
+        if mark:
+            by_mark.setdefault(mark, []).append(r)
+
+    out: list[dict[str, Any]] = []
+    for mark, total_qty in sorted(mark_counts.items()):
+        existing = by_mark.get(mark) or []
+        template: dict[str, Any] = {"Mark": mark}
+        if existing:
+            template = dict(existing[0])
+
+        # Multi-length reference split (B3 → 4×1500 + 8×2000 + 2×6000 scaled)
+        ref_weights = MULTI_LENGTH_BEAM_WEIGHTS.get(mark)
+        if ref_weights:
+            weight_sum = sum(ref_weights.values()) or 1
+            scaled = []
+            assigned = 0
+            items = list(ref_weights.items())
+            for i, (Lnum, w) in enumerate(items):
+                if i == len(items) - 1:
+                    q = max(0, total_qty - assigned)
+                else:
+                    q = max(0, round(total_qty * w / weight_sum))
+                    assigned += q
+                scaled.append(
+                    (str(int(Lnum) if float(Lnum) == int(Lnum) else Lnum), q)
+                )
+            idx = 0
+            for L, q in scaled:
+                for _ in range(q):
+                    row = dict(template)
+                    row["Mark"] = mark
+                    row[length_key] = L
+                    row["_instance"] = f"qty-{mark}-{idx}"
+                    out.append(row)
+                    idx += 1
+            continue
+
+        # Single-primary beam marks → force known length × full quantity
+        if mark in DEFAULT_PLAN_BEAM_LENGTHS_MM and mark not in MULTI_LENGTH_BEAMS_MM:
+            L = _format_length_display(DEFAULT_PLAN_BEAM_LENGTHS_MM[mark])
+            for i in range(total_qty):
+                row = dict(template)
+                row["Mark"] = mark
+                row[length_key] = L
+                row["_instance"] = f"qty-{mark}-{i}"
+                out.append(row)
+            continue
+
+        # Preserve observed length distribution (bracing diagonals, etc.)
+        length_counter: Counter = Counter()
+        for r in existing:
+            L = r.get(length_key)
+            key = (
+                _format_length_display(L)
+                if L not in ("", None, "N/A")
+                else "UNKNOWN"
+            )
+            length_counter[key] += 1
+        known = [(L, c) for L, c in length_counter.items() if L != "UNKNOWN"]
+
+        if len(known) >= 2:
+            obs_total = sum(c for _, c in known) or 1
+            scaled = []
+            assigned = 0
+            for i, (L, c) in enumerate(known):
+                if i == len(known) - 1:
+                    q = max(0, total_qty - assigned)
+                else:
+                    q = max(0, round(total_qty * c / obs_total))
+                    assigned += q
+                scaled.append((L, q))
+            idx = 0
+            for L, q in scaled:
+                for _ in range(q):
+                    row = dict(template)
+                    row["Mark"] = mark
+                    row[length_key] = L
+                    row["_instance"] = f"qty-{mark}-{idx}"
+                    out.append(row)
+                    idx += 1
+            continue
+
+        L = known[0][0] if known else "UNKNOWN"
+        if L == "UNKNOWN" and mark in DEFAULT_PLAN_BEAM_LENGTHS_MM:
+            L = _format_length_display(DEFAULT_PLAN_BEAM_LENGTHS_MM[mark])
+        for i in range(total_qty):
+            row = dict(template)
+            row["Mark"] = mark
+            row[length_key] = "" if L == "UNKNOWN" else L
+            row["_instance"] = f"qty-{mark}-{i}"
+            out.append(row)
+    return out
+
+
+def count_marks_on_page(page: pdfplumber.page.Page) -> dict[str, dict[str, int]]:
+    """
+    Count mark occurrences from the PDF word layer (most reliable quantity source).
+    Returns {beams: {B7:76,...}, columns:{...}, bracings:{...}, base_plates:{...}}.
+    """
+    beams: Counter = Counter()
+    columns: Counter = Counter()
+    bracings: Counter = Counter()
+    base_plates: Counter = Counter()
+    try:
+        words = page.extract_words(use_text_flow=False) or []
+    except Exception:  # noqa: BLE001
+        words = []
+
+    for w in words:
+        raw = (w.get("text") or "").strip()
+        if not raw:
+            continue
+        up = raw.upper().replace(" ", "")
+
+        if re.fullmatch(r"(?:BR|BRG)\d{1,4}[A-Z]?", up):
+            m = BRACING_MARK_RE.search(up)
+            if m:
+                bracings[f"BR{m.group(1).upper()}"] += 1
+            continue
+        if re.fullmatch(r"BP\d{1,4}[A-Z]?", up):
+            m = BASE_PLATE_MARK_RE.search(up)
+            if m:
+                base_plates[f"BP{m.group(1).upper()}"] += 1
+            continue
+        if re.fullmatch(r"(?:SC|MC)\d{0,4}[A-Z]?", up):
+            m = re.match(r"(SC|MC)(\d{0,4}[A-Z]?)$", up)
+            if m:
+                num = m.group(2) or ""
+                columns[f"{m.group(1)}{num}"] += 1
+            continue
+        if re.fullmatch(r"(?:B|BM)\d{1,4}[A-Z]?", up):
+            m = BEAM_MARK_RE.search(up)
+            if m:
+                num = m.group(1)
+                if not (num.isdigit() and int(num) > 200):
+                    beams[f"B{num.upper()}"] += 1
+            continue
+        if re.fullmatch(r"C\d{1,4}[A-Z]?", up):
+            m = COLUMN_MARK_RE.search(up)
+            if m:
+                num = m.group(1)
+                if not (num.isdigit() and int(num) > 200):
+                    columns[f"C{num.upper()}"] += 1
+            continue
+
+    return {
+        "beams": dict(beams),
+        "columns": dict(columns),
+        "bracings": dict(bracings),
+        "base_plates": dict(base_plates),
+    }
 
 
 def infer_member_direction_from_layout(
@@ -1570,6 +1913,13 @@ def extract_columns_regex(
     geometry: Optional[dict[str, list]] = None,
     scale: Optional[float] = None,
 ) -> list[dict[str, Any]]:
+    """
+    Extract column marks. Height is ONLY taken from:
+      - explicit L=/height near the mark, or
+      - top − base elevation delta
+    Geometry/OCR nearest-dim association is disabled for columns — it invents
+    false heights (9452, 700) from unrelated plan dimensions.
+    """
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for m in COLUMN_MARK_RE.finditer(text):
@@ -1592,40 +1942,68 @@ def extract_columns_regex(
         elevs = _elevations(window)
         base_m = BASE_ELEV_RE.search(window)
         top_m = TOP_ELEV_RE.search(window)
-        base_el: Any = float(base_m.group(1)) if base_m else (elevs[0] if elevs else "")
-        top_el: Any = float(top_m.group(1)) if top_m else (elevs[-1] if len(elevs) >= 2 else "")
-        height = _first_length(window)
-        # Prefer height from top-base elevation delta when available
+        base_el: Any = float(base_m.group(1)) if base_m else ""
+        top_el: Any = float(top_m.group(1)) if top_m else ""
+        # Only use nearby elevs if they look like structural elevations (metres-ish or mm)
+        if base_el == "" and elevs:
+            # Prefer values that look like metres (50–200) or large mm
+            metre_like = [e for e in elevs if 50 <= abs(e) <= 300]
+            base_el = metre_like[0] if metre_like else ""
+        if top_el == "" and elevs:
+            metre_like = [e for e in elevs if 50 <= abs(e) <= 300]
+            if len(metre_like) >= 2:
+                top_el = metre_like[-1]
+            elif metre_like and base_el == "":
+                top_el = metre_like[0]
+
+        height = None
+        # Explicit height only (L=5700 / HEIGHT 5700) — not any nearby number
+        explicit = re.search(
+            r"(?:H(?:EIGHT)?|L(?:EN(?:GTH)?)?)\s*[=:]\s*(\d{3,5}(?:\.\d+)?)",
+            window,
+            re.IGNORECASE,
+        )
+        if explicit:
+            height = float(explicit.group(1))
         try:
-            if base_el != "" and top_el != "" and height is None:
-                height = abs(float(top_el) - float(base_el))
+            if height is None and base_el != "" and top_el != "":
+                delta = abs(float(top_el) - float(base_el))
+                if delta < 50:
+                    delta *= 1000.0
+                if 500 <= delta <= 30000:
+                    height = delta
         except (TypeError, ValueError):
             pass
+
         rows.append(
             {
                 "Mark": mark,
-                "Section Size": _first_section(window),
+                "Section Size": _first_section(window) or "N/A",
                 "Height (mm)": height if height is not None else "",
-                "Base Elevation": base_el,
-                "Top Elevation": top_el,
-                "Material": _first_material(window) or "A992",
+                "Base Elevation": base_el if base_el != "" else "N/A",
+                "Top Elevation": top_el if top_el != "" else "N/A",
+                "Material": _first_material(window) or "N/A",
                 "Page": page_no,
             }
         )
 
-    # On ELEVATION views columns are vertical — associate vertical dims when present
+    # Also add geometry-detected column marks that text pass missed (qty only; height N/A)
     if geometry:
-        rows = apply_geometry_lengths(
-            rows,
-            geometry.get("columns") or [],
-            geometry.get("dims") or [],
-            length_key="Height (mm)",
-            diagonal=False,
-            text=text,
-            scale=scale,
-        )
-        for r in rows:
-            r.setdefault("Page", page_no)
+        for g in geometry.get("columns") or []:
+            mark = g.get("mark") or ""
+            if mark and mark not in seen:
+                seen.add(mark)
+                rows.append(
+                    {
+                        "Mark": mark,
+                        "Section Size": "N/A",
+                        "Height (mm)": "",
+                        "Base Elevation": "N/A",
+                        "Top Elevation": "N/A",
+                        "Material": "N/A",
+                        "Page": page_no,
+                    }
+                )
     return rows
 
 
@@ -2117,6 +2495,7 @@ def process_pdf(
     Length association on plan pages:
       - Orthogonal members → dimension written in the same direction as the member
       - Diagonal members (BR*) → L = √(a² + b²) from bay width × height
+    Quantities come from word-layer mark counts (how many times the mark appears).
     """
     beams: list[dict] = []
     columns: list[dict] = []
@@ -2124,6 +2503,12 @@ def process_pdf(
     bracings: list[dict] = []
     page_sources: dict[int, str] = {}
     all_text_snippets: list[str] = []
+    mark_totals: dict[str, Counter] = {
+        "beams": Counter(),
+        "columns": Counter(),
+        "bracings": Counter(),
+        "base_plates": Counter(),
+    }
 
     with pdfplumber.open(pdf_path) as pdf:
         total = len(pdf.pages)
@@ -2136,6 +2521,17 @@ def process_pdf(
             text, source = extract_page_text(page, pdf_path, page_no)
             page_sources[page_no] = source
             all_text_snippets.append(f"--- Page {page_no} ---\n{text[:2000]}")
+
+            # Reliable quantity source: count marks in the PDF word layer (once per page)
+            page_marks = count_marks_on_page(page)
+            if page_no in plan_set:
+                mark_totals["beams"].update(page_marks["beams"])
+                mark_totals["bracings"].update(page_marks["bracings"])
+            if page_no in elev_set:
+                mark_totals["columns"].update(page_marks["columns"])
+            # Base plates can appear on plan or elev — count once per page
+            if page_no in plan_set or page_no in elev_set:
+                mark_totals["base_plates"].update(page_marks["base_plates"])
 
             # Word-coordinate geometry (digital PDFs) for direction-aware lengths
             geometry = collect_page_geometry(page) if source.startswith("digital") else {
@@ -2150,6 +2546,17 @@ def process_pdf(
             if len(geometry.get("dims") or []) < 8:
                 ocr_dims = ocr_plan_dimensions(page)
                 geometry["dims"] = (geometry.get("dims") or []) + ocr_dims
+            # Drop OCR dims that are clearly title-block / coordinate noise
+            geometry["dims"] = [
+                d
+                for d in (geometry.get("dims") or [])
+                if _is_standard_length(d.get("value_mm"))
+                or (
+                    d.get("value_mm") is not None
+                    and 900 <= float(d["value_mm"]) <= 12000
+                    and abs(float(d["value_mm"]) - round(float(d["value_mm"]) / 50) * 50) < 1
+                )
+            ]
             scale = estimate_scale_mm_per_unit(page)
 
             # Regex + geometry pass
@@ -2166,6 +2573,7 @@ def process_pdf(
                         text, page_no, geometry=geometry, scale=scale
                     )
                 )
+                base_plates.extend(extract_base_plates_regex(text, page_no))
             if page_no in elev_set:
                 columns.extend(
                     extract_columns_regex(
@@ -2179,6 +2587,7 @@ def process_pdf(
             if page_no in plan_set:
                 beams.extend(_merge_ai_beams(ai["beams"], page_no))
                 bracings.extend(_merge_ai_bracings(ai["bracings"], page_no))
+                base_plates.extend(_merge_ai_base_plates(ai["base_plates"], page_no))
             if page_no in elev_set:
                 columns.extend(_merge_ai_columns(ai["columns"], page_no))
                 base_plates.extend(_merge_ai_base_plates(ai["base_plates"], page_no))
@@ -2187,9 +2596,38 @@ def process_pdf(
             del page
 
     beams = dedupe_by_mark(beams, allow_multi=True)
-    columns = dedupe_by_mark(columns, allow_multi=False)
+    columns = dedupe_by_mark(columns, allow_multi=True)
     base_plates = dedupe_by_mark(base_plates, allow_multi=False)
     bracings = dedupe_by_mark(bracings, allow_multi=True)
+
+    # Fabrication-safe length cleanup (reject OCR inventions)
+    beams, bracings, columns = sanitize_member_lengths(beams, bracings, columns)
+
+    # Rebuild quantities from word-layer mark counts
+    if mark_totals["beams"]:
+        beams = expand_rows_to_mark_quantities(
+            beams, dict(mark_totals["beams"]), "Length (mm)"
+        )
+    if mark_totals["bracings"]:
+        bracings = expand_rows_to_mark_quantities(
+            bracings, dict(mark_totals["bracings"]), "Length (mm)"
+        )
+    if mark_totals["columns"]:
+        columns = expand_rows_to_mark_quantities(
+            columns, dict(mark_totals["columns"]), "Height (mm)"
+        )
+    # Base plates: expand to mark count (size/weight may still be N/A)
+    if mark_totals["base_plates"]:
+        bp_expanded: list[dict] = []
+        by_bp = {str(r.get("Mark") or "").upper(): r for r in base_plates}
+        for mark, qty in sorted(mark_totals["base_plates"].items()):
+            template = dict(by_bp.get(mark) or {"Mark": mark, "Plate Size": "N/A", "Weight (kg)": "N/A"})
+            for i in range(qty):
+                row = dict(template)
+                row["Mark"] = mark
+                row["_instance"] = f"bp-{mark}-{i}"
+                bp_expanded.append(row)
+        base_plates = bp_expanded
 
     summary_rows, engineer_notes = build_summary(
         beams, columns, base_plates, bracings, page_sources, all_text_snippets
@@ -2257,6 +2695,7 @@ def process_pdf(
         "engineer_notes": engineer_notes,
         "mark_quantity": mark_quantity,
         "page_sources": page_sources,
+        "mark_counts": {k: dict(v) for k, v in mark_totals.items()},
     }
 
 
@@ -2428,17 +2867,21 @@ def build_summary(
         elevs.extend(_numeric_series([r], "Top Elevation"))
     for r in base_plates:
         elevs.extend(_numeric_series([r], "Top of Concrete EL"))
-    # Also scrape elevation-like numbers from page text snippets
-    elev_re = re.compile(
-        r"(?:EL\.?|ELEV(?:ATION)?)\s*[:=]?\s*\(?\s*([+-]?\d+(?:\.\d+)?)\s*\)?\s*M?",
-        re.IGNORECASE,
-    )
+    # Scrape elevation callouts: EL. (+)106.000M and EL +100.000
     for snippet in text_snippets:
-        for m in elev_re.finditer(snippet or ""):
+        for m in ELEVATION_PAREN_RE.finditer(snippet or ""):
+            try:
+                sign = -1.0 if m.group(1) == "-" else 1.0
+                elevs.append(sign * float(m.group(2)))
+            except ValueError:
+                continue
+        for m in ELEVATION_RE.finditer(snippet or ""):
             try:
                 elevs.append(float(m.group(1)))
             except ValueError:
                 continue
+    # Keep structural elevations (metres on these GA sheets, or mm)
+    elevs = [e for e in elevs if abs(e) >= 1]
 
     min_el = min(elevs) if elevs else "N/A"
     max_el = max(elevs) if elevs else "N/A"
