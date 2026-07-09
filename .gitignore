@@ -1,0 +1,33 @@
+# Environment / secrets
+.env
+.env.local
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env.venv/
+.pytest_cache/
+.mypy_cache/
+*.xlsx
+
+# Node
+frontend/node_modules/
+frontend/dist/
+npm-debug.log*
+yarn-error.log*
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Temp uploads
+tmp/
+temp/
+*.pdf
+!docs/**/*.pdf
