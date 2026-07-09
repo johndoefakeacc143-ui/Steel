@@ -17,10 +17,10 @@ from typing import List, Optional
 
 import google.generativeai as genai
 import pandas as pd
+from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from pdf2image import convert_from_bytes
 from pydantic import BaseModel, Field, field_validator
 
@@ -40,12 +40,21 @@ BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "generated_exports"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+# Load GEMINI_API_KEY from .env (if present) without overriding a real shell export.
+load_dotenv(BASE_DIR / ".env", override=False)
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL_NAME = "gemini-2.5-flash"
 PDF_DPI = 200
 MAX_PAGES_TO_ANALYZE = 10
 SAFE_FILENAME_PATTERN = re.compile(r"^takeoff_[a-zA-Z0-9_\-]+\.xlsx$")
 
+MISSING_API_KEY_DETAIL = (
+    "GEMINI_API_KEY is not configured. "
+    "Create a free key at https://aistudio.google.com/apikey, then either: "
+    "(1) copy .env.example to .env and set GEMINI_API_KEY=your_key, or "
+    "(2) run: export GEMINI_API_KEY='your_key' — then restart the server."
+)
 # ---------------------------------------------------------------------------
 # Pydantic schemas — strict Structured JSON Output for Gemini
 # ---------------------------------------------------------------------------
@@ -123,17 +132,21 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 
+def get_gemini_api_key() -> str:
+    """Return the current Gemini API key, re-reading env so .env reloads after restart."""
+    global GEMINI_API_KEY
+    # Prefer a live process env / .env value in case the server was restarted after setup.
+    load_dotenv(BASE_DIR / ".env", override=False)
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+    return GEMINI_API_KEY
+
+
 def configure_gemini() -> None:
     """Configure the Google Generative AI client with the API key."""
-    if not GEMINI_API_KEY:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "GEMINI_API_KEY environment variable is not set. "
-                "Export your Google AI Studio API key before starting the server."
-            ),
-        )
-    genai.configure(api_key=GEMINI_API_KEY)
+    api_key = get_gemini_api_key()
+    if not api_key:
+        raise HTTPException(status_code=503, detail=MISSING_API_KEY_DETAIL)
+    genai.configure(api_key=api_key)
     logger.info("Gemini API configured successfully.")
 
 
@@ -279,12 +292,14 @@ async def serve_frontend() -> HTMLResponse:
 
 @app.get("/health")
 async def health_check() -> dict:
-    """Simple health probe for monitoring."""
+    """Simple health probe for monitoring and frontend setup checks."""
+    key_configured = bool(get_gemini_api_key())
     return {
-        "status": "ok",
+        "status": "ok" if key_configured else "setup_required",
         "service": "NEXT-GEN PRO Structural Takeoff",
         "model": GEMINI_MODEL_NAME,
-        "gemini_key_configured": bool(GEMINI_API_KEY),
+        "gemini_key_configured": key_configured,
+        "setup_hint": None if key_configured else MISSING_API_KEY_DETAIL,
     }
 
 

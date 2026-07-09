@@ -36,9 +36,19 @@ python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
+# Required: Google Gemini API key
+cp .env.example .env
+# Edit .env and set: GEMINI_API_KEY=your_real_key
+# Get a free key at https://aistudio.google.com/apikey
+```
+
+Alternatively, export the key in your shell (then restart the server):
+
+```bash
 export GEMINI_API_KEY="your_api_key_here"
 ```
 
+> If you see **“GEMINI_API_KEY is not configured”** in the UI, the key is missing from the process environment. Add it via `.env` or `export`, then restart Uvicorn.
 ## Run
 
 ```bash

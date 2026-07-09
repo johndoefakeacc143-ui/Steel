@@ -210,7 +210,7 @@
           </div>
         </div>
         <div class="flex items-center gap-3">
-          <span class="status-pill live hidden sm:inline-flex">System Online</span>
+          <span id="statusPill" class="status-pill hidden sm:inline-flex">Checking…</span>
           <span class="text-[11px] text-slate-500 hidden md:inline">Gemini 2.5 Flash Vision</span>
         </div>
       </div>
@@ -230,6 +230,23 @@
           Drag in your fabrication or GA drawing. The engine converts pages at 200 DPI, runs a deep visual scan, and exports a clean Excel bill of materials.
         </p>
       </section>
+
+      <!-- API key setup banner -->
+      <div
+        id="setupBanner"
+        class="hidden-block mb-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-5 py-4 animate-fadeUp"
+        role="status"
+      >
+        <p class="text-amber-200 font-semibold text-sm tracking-wide uppercase">Setup Required</p>
+        <p id="setupBannerText" class="text-slate-200 text-sm mt-2 leading-relaxed">
+          GEMINI_API_KEY is not configured. Create a free key at
+          <a class="text-sky-300 underline hover:text-sky-200" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>,
+          then add it to a <code class="text-amber-100">.env</code> file and restart the server.
+        </p>
+        <pre class="mt-3 text-xs text-slate-300 bg-slate-950/60 border border-slate-700/60 rounded-xl p-3 overflow-x-auto font-mono leading-relaxed">cp .env.example .env
+# edit .env → GEMINI_API_KEY=your_real_key
+uvicorn backend:app --host 0.0.0.0 --port 8000 --reload</pre>
+      </div>
 
       <!-- Upload card -->
       <section class="glass-panel rounded-2xl shadow-panel p-6 sm:p-8 animate-fadeUp" style="animation-delay: 0.05s">
@@ -391,8 +408,12 @@
       const previewSection = document.getElementById("previewSection");
       const previewBody = document.getElementById("previewBody");
       const previewCount = document.getElementById("previewCount");
+      const setupBanner = document.getElementById("setupBanner");
+      const setupBannerText = document.getElementById("setupBannerText");
+      const statusPill = document.getElementById("statusPill");
 
       let selectedFile = null;
+      let geminiReady = true;
 
       function formatBytes(bytes) {
         if (!bytes && bytes !== 0) return "";
@@ -411,6 +432,10 @@
         errorBox.textContent = "";
       }
 
+      function refreshScanButton() {
+        scanBtn.disabled = !selectedFile || !geminiReady || fileInput.disabled;
+      }
+
       function setLoading(isLoading) {
         if (isLoading) {
           loadingState.classList.remove("hidden-block");
@@ -421,7 +446,7 @@
         } else {
           loadingState.classList.add("hidden-block");
           fileInput.disabled = false;
-          scanBtn.disabled = !selectedFile;
+          refreshScanButton();
         }
       }
 
@@ -435,14 +460,43 @@
           selectedFileName.textContent = file.name;
           fileMeta.textContent = file.name + " · " + formatBytes(file.size);
           dropZone.classList.add("has-file");
-          scanBtn.disabled = false;
         } else {
           selectedFileName.textContent = "";
           fileMeta.textContent = "No file selected";
           dropZone.classList.remove("has-file");
-          scanBtn.disabled = true;
           fileInput.value = "";
         }
+        refreshScanButton();
+      }
+
+      async function checkHealth() {
+        try {
+          const response = await fetch(API_BASE + "/health");
+          const payload = await response.json();
+          geminiReady = !!payload.gemini_key_configured;
+
+          if (geminiReady) {
+            setupBanner.classList.add("hidden-block");
+            statusPill.textContent = "System Online";
+            statusPill.classList.add("live");
+          } else {
+            setupBanner.classList.remove("hidden-block");
+            if (payload.setup_hint) {
+              setupBannerText.textContent = payload.setup_hint;
+            }
+            statusPill.textContent = "API Key Missing";
+            statusPill.classList.remove("live");
+          }
+        } catch (err) {
+          geminiReady = false;
+          setupBanner.classList.remove("hidden-block");
+          setupBannerText.textContent =
+            "Cannot reach the backend at " + API_BASE +
+            ". Start it with: uvicorn backend:app --host 0.0.0.0 --port 8000 --reload";
+          statusPill.textContent = "Backend Offline";
+          statusPill.classList.remove("live");
+        }
+        refreshScanButton();
       }
 
       function isPdfFile(file) {
@@ -511,6 +565,13 @@
       async function runDeepScan() {
         if (!selectedFile) {
           showError("Please select a PDF drawing before running the scan.");
+          return;
+        }
+        if (!geminiReady) {
+          showError(
+            "GEMINI_API_KEY is not configured. Add your Google AI Studio key to .env and restart the server."
+          );
+          setupBanner.classList.remove("hidden-block");
           return;
         }
 
@@ -614,6 +675,8 @@
         previewSection.classList.add("hidden-block");
         loadingState.classList.add("hidden-block");
       });
+
+      checkHealth();
     })();
   </script>
 </body>
