@@ -2126,25 +2126,36 @@ def _write_sheet(ws, rows: list[dict], columns: list[str]) -> None:
         ws.column_dimensions[letter].width = min(max(12, max_len + 2), 60)
 
 
+def _beams_takeoff_rows(beams: list[dict]) -> list[dict[str, Any]]:
+    """
+    Beams Excel sheet: only Mark, Quantity, Length — one row per mark+length.
+    Example:
+      B3 | 4 | 1500
+      B3 | 8 | 2000
+      B3 | 2 | 6000
+      B7 | 76 | 2000
+    """
+    grouped = _count_by_mark_and_length(beams, "Length (mm)")
+    return [
+        {
+            "Mark": mark,
+            "Quantity": qty,
+            "Length": length if length != "UNKNOWN" else "",
+        }
+        for mark, length, qty in grouped
+    ]
+
+
 def build_excel(result: dict[str, Any]) -> bytes:
     wb = Workbook()
 
-    # Sheet 1 — Beams
+    # Sheet 1 — Beams (Mark / Quantity / Length only)
     ws1 = wb.active
     ws1.title = "Beams"
     _write_sheet(
         ws1,
-        result["beams"],
-        [
-            "Mark",
-            "Section Size",
-            "Length (mm)",
-            "Length Method",
-            "Material",
-            "Start EL",
-            "End EL",
-            "Page",
-        ],
+        _beams_takeoff_rows(result.get("beams") or []),
+        ["Mark", "Quantity", "Length"],
     )
 
     # Sheet 2 — Columns
@@ -2180,17 +2191,16 @@ def build_excel(result: dict[str, Any]) -> bytes:
         ],
     )
 
-    # Hidden helper sheet for bracing lengths used in Summary (also listed in notes)
-    # Bracings are not a primary Excel tab, but Length Method is kept on beam/brace rows.
-    # Append bracing detail into Summary narrative already; also stash on Summary rows.
-
     # Sheet 4 — Summary
     ws4 = wb.create_sheet("Summary")
-    # Include bracing length breakdown already produced by build_summary
     _write_sheet(ws4, result["summary"], ["Category", "Metric", "Value"])
     # Append bracing table under narrative for transparency
     brace_start = len(result["summary"]) + 16
-    ws4.cell(row=brace_start, column=1, value="Bracing Lengths (√(a²+b²) when diagonal)").font = Font(bold=True)
+    ws4.cell(
+        row=brace_start,
+        column=1,
+        value="Bracing Lengths (√(a²+b²) when diagonal)",
+    ).font = Font(bold=True)
     brace_rows = result.get("bracings") or []
     if brace_rows:
         headers = ["Mark", "Section Size", "Length (mm)", "Length Method", "Page"]
