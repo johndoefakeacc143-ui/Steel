@@ -103,6 +103,8 @@ association and the Summary narrative.
 
 ### 2. Backend
 
+Use **Python 3.10–3.12** (3.11 or 3.12 recommended on Windows).
+
 ```bash
 cd backend
 python -m venv .venv
@@ -113,8 +115,24 @@ python -m venv .venv
 # macOS / Linux:
 source .venv/bin/activate
 
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+If `numpy` fails with `metadata-generation-failed` on Windows:
+
+```bat
+python -m pip install --upgrade pip setuptools wheel
+pip install numpy
+pip install -r requirements.txt
+```
+
+Or install a prebuilt wheel first, then the rest:
+
+```bat
+pip install "numpy>=1.26.4,<2.3"
+pip install -r requirements.txt
 ```
 
 Health check: [http://127.0.0.1:8000/api/health](http://127.0.0.1:8000/api/health)
