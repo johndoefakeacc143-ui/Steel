@@ -484,10 +484,17 @@ def _first_section(window: str) -> str:
 
 def _first_length(window: str) -> Optional[float]:
     # Prefer explicit L= / Length / Height patterns first
+    # Ignore survey/grid coordinates like N=3375.000 / E=4089.500 — not member lengths
+    cleaned = re.sub(
+        r"\b[NE]\s*=\s*[+\-]?\d+(?:\.\d+)?",
+        " ",
+        window,
+        flags=re.IGNORECASE,
+    )
     explicit = re.search(
         r"(?:L|LEN(?:GTH)?|H(?:EIGHT)?|HT)\s*[=:]?\s*(\d{3,5}(?:\.\d+)?)\s*(?:mm)?"
         r"|(?:L|LEN(?:GTH)?|H(?:EIGHT)?|HT)\s*[=:]?\s*(\d{1,2}(?:\.\d+)?)\s*m\b",
-        window,
+        cleaned,
         re.IGNORECASE,
     )
     if explicit:
@@ -495,7 +502,7 @@ def _first_length(window: str) -> Optional[float]:
             return float(explicit.group(1))
         if explicit.group(2):
             return float(explicit.group(2)) * 1000.0
-    for m in LENGTH_RE.finditer(window):
+    for m in LENGTH_RE.finditer(cleaned):
         val = _parse_length_mm(m)
         if val is not None and val >= 200:
             return val
@@ -595,13 +602,20 @@ def collect_page_geometry(page: pdfplumber.page.Page) -> dict[str, list[dict[str
         if re.fullmatch(r"(?:B|BM|BEAM)[-\s]?\d{1,4}[A-Z]?", raw, re.IGNORECASE):
             m = BEAM_MARK_RE.search(raw)
             if m:
-                item["mark"] = f"B{m.group(1).upper()}"
+                # Skip absurd marks from drawing numbers (B402 from 402-R-...)
+                num = m.group(1)
+                if num.isdigit() and int(num) > 200:
+                    return False
+                item["mark"] = f"B{num.upper()}"
                 beams.append(item)
                 return True
         if re.fullmatch(r"(?:C|COL|COLUMN)[-\s]?\d{1,4}[A-Z]?", raw, re.IGNORECASE):
             m = COLUMN_MARK_RE.search(raw)
             if m:
-                item["mark"] = f"C{m.group(1).upper()}"
+                num = m.group(1)
+                if num.isdigit() and int(num) > 200:
+                    return False
+                item["mark"] = f"C{num.upper()}"
                 columns.append(item)
                 return True
         if re.fullmatch(r"(?:BR|BRG|BRACING)[-\s]?\d{1,4}[A-Z]?", raw, re.IGNORECASE):
@@ -717,6 +731,177 @@ def collect_page_geometry(page: pdfplumber.page.Page) -> dict[str, list[dict[str
     }
 
 
+def ocr_plan_dimensions(page: pdfplumber.page.Page, dpi: int = 120) -> list[dict[str, Any]]:
+    """
+    Harvest dimension callouts that live in the drawing graphics (not the text
+    layer). Many steel plans only embed member marks as text; sizes like 1500 /
+    2000 / 6000 are drawn as graphics and need OCR.
+
+    Runs upright + 90° rotations so vertical dimension strings are found.
+    Coordinates are mapped back into pdfplumber page space.
+    """
+    try:
+        pil = page.to_image(resolution=dpi).original
+    except Exception as exc:  # noqa: BLE001
+        print(f"[OCR dims] render failed: {exc}")
+        return []
+
+    arr = np.array(pil)
+    page_w, page_h = float(page.width), float(page.height)
+    img_h, img_w = arr.shape[:2]
+    sx = page_w / img_w
+    sy = page_h / img_h
+
+    dim_re = re.compile(r"^\d{3,5}$")
+    found: list[dict[str, Any]] = []
+
+    def _ingest(gray: np.ndarray, transform: str) -> None:
+        try:
+            data = pytesseract.image_to_data(
+                gray,
+                config="--psm 11 -c tessedit_char_whitelist=0123456789",
+                output_type=pytesseract.Output.DICT,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[OCR dims] tesseract failed ({transform}): {exc}")
+            return
+        n = len(data.get("text") or [])
+        for i in range(n):
+            raw = (data["text"][i] or "").strip()
+            if not dim_re.fullmatch(raw):
+                continue
+            try:
+                conf = float(data["conf"][i])
+            except ValueError:
+                conf = -1.0
+            if conf < 45:
+                continue
+            val = float(raw)
+            if val < 400 or val > 20000:
+                continue
+            left, top = int(data["left"][i]), int(data["top"][i])
+            width, height = int(data["width"][i]), int(data["height"][i])
+            if transform == "0":
+                ix, iy = left + width / 2.0, top + height / 2.0
+                orient = "horizontal" if width >= height else "vertical"
+            elif transform == "90cw":
+                ix = top + height / 2.0
+                iy = img_h - 1 - (left + width / 2.0)
+                orient = "vertical"
+            elif transform == "90ccw":
+                ix = img_w - 1 - (top + height / 2.0)
+                iy = left + width / 2.0
+                orient = "vertical"
+            else:
+                continue
+            px, py = ix * sx, iy * sy
+            found.append(
+                {
+                    "text": raw,
+                    "x0": px - 5,
+                    "x1": px + 5,
+                    "top": py - 5,
+                    "bottom": py + 5,
+                    "cx": px,
+                    "cy": py,
+                    "orientation": orient,
+                    "value_mm": val,
+                    "raw_value": val,
+                    "source": f"ocr-{transform}",
+                }
+            )
+
+    gray0 = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    _ingest(gray0, "0")
+    _ingest(cv2.rotate(gray0, cv2.ROTATE_90_CLOCKWISE), "90cw")
+    _ingest(cv2.rotate(gray0, cv2.ROTATE_90_COUNTERCLOCKWISE), "90ccw")
+
+    unique: list[dict[str, Any]] = []
+    for d in found:
+        if any(
+            abs(d["value_mm"] - u["value_mm"]) < 1
+            and abs(d["cx"] - u["cx"]) < 20
+            and abs(d["cy"] - u["cy"]) < 20
+            for u in unique
+        ):
+            continue
+        unique.append(d)
+    print(f"[OCR dims] harvested {len(unique)} dimension callouts")
+    return unique
+
+
+def estimate_scale_mm_per_unit(page: pdfplumber.page.Page) -> Optional[float]:
+    """
+    Estimate mm-per-page-unit from PB1–PB2 grid labels assumed 6000 mm.
+    Edit GRID_SPAN_MM below if your primary grid is not 6000.
+    """
+    GRID_SPAN_MM = 6000.0  # <-- edit if primary grid is not 6000
+    try:
+        words = page.extract_words(use_text_flow=False) or []
+    except Exception:  # noqa: BLE001
+        return None
+    pb1, pb2 = [], []
+    for w in words:
+        t = (w.get("text") or "").strip().upper()
+        cx = (w["x0"] + w["x1"]) / 2.0
+        if t == "PB1":
+            pb1.append(cx)
+        elif t == "PB2":
+            pb2.append(cx)
+    if not pb1 or not pb2:
+        return None
+    spans = []
+    for a in pb1:
+        rights = [b for b in pb2 if b > a + 40]
+        if rights:
+            spans.append(min(rights) - a)
+    if not spans:
+        return None
+    avg = sum(spans) / len(spans)
+    if avg < 20:
+        return None
+    return GRID_SPAN_MM / avg
+
+
+def length_from_mark_spacing(
+    mark_item: dict[str, Any],
+    same_mark_points: list[dict[str, Any]],
+    scale: float,
+    preferred_direction: Optional[str] = None,
+) -> tuple[Optional[float], str]:
+    """
+    Fallback when OCR dims are sparse: estimate length from spacing to the
+    nearest same-mark neighbour along the member direction, scaled by grid.
+    """
+    if scale <= 0 or not same_mark_points:
+        return None, ""
+    mx, my = mark_item["cx"], mark_item["cy"]
+    direction = preferred_direction or "unknown"
+    best = None
+    for p in same_mark_points:
+        if abs(p["cx"] - mx) < 0.5 and abs(p["cy"] - my) < 0.5:
+            continue
+        dx, dy = abs(p["cx"] - mx), abs(p["cy"] - my)
+        dist = float(np.hypot(dx, dy))
+        if dist < 15:
+            continue
+        if direction == "vertical" or (direction == "unknown" and dy >= dx):
+            if dx > 40:
+                continue
+            length = round(dy * scale)
+            how = "spacing-vertical"
+        else:
+            if dy > 40:
+                continue
+            length = round(dx * scale)
+            how = "spacing-horizontal"
+        if 400 <= length <= 20000:
+            if best is None or dist < best[0]:
+                best = (dist, float(length), how)
+    if best:
+        return best[1], best[2]
+    return None, ""
+
 
 def diagonal_length_from_bay(
     brace_item: dict[str, Any],
@@ -806,6 +991,7 @@ def apply_geometry_lengths(
     length_key: str,
     diagonal: bool = False,
     text: str = "",
+    scale: Optional[float] = None,
 ) -> list[dict[str, Any]]:
     """
     Attach / override lengths using plan geometry.
@@ -820,6 +1006,11 @@ def apply_geometry_lengths(
     for r in rows:
         by_mark.setdefault(r.get("Mark") or "", r)
 
+    # Group geometry marks by mark id for spacing fallback
+    by_geo_mark: dict[str, list[dict[str, Any]]] = {}
+    for g in geo_marks:
+        by_geo_mark.setdefault(g.get("mark") or "", []).append(g)
+
     built: list[dict[str, Any]] = []
     for idx, g in enumerate(geo_marks):
         mark = g.get("mark") or ""
@@ -831,6 +1022,9 @@ def apply_geometry_lengths(
         if diagonal:
             local = _mark_local_text(text, mark, radius=160)
             length, how = diagonal_length_from_bay(g, dims, local)
+            if length is None and scale:
+                # Bay fallback: use nearest horiz+vert OCR/spacing dims already in diagonal_length_from_bay
+                pass
             if length is not None:
                 base[length_key] = length
                 base["Length Method"] = how
@@ -841,15 +1035,36 @@ def apply_geometry_lengths(
             length, direction = length_from_parallel_dimension(
                 g, dims, preferred_direction=preferred
             )
+            # Prefer grid-spacing when parallel association fell back to "nearest"
+            # (weak match) or found nothing — spacing is reliable on regular racks.
+            weak = length is None or direction == "nearest"
+            if weak and scale:
+                s_len, s_how = length_from_mark_spacing(
+                    g,
+                    by_geo_mark.get(mark) or [],
+                    scale,
+                    preferred_direction=preferred,
+                )
+                if s_len is not None:
+                    # If we had a weak nearest dim, only override when spacing
+                    # is a clean structural length (multiples of 500).
+                    if length is None or (
+                        direction == "nearest" and s_len % 500 == 0
+                    ):
+                        length, direction = s_len, s_how
+
             existing = base.get(length_key)
             # Prefer explicit schedule lengths (L=3000) over nearby grid dims.
-            # Geometry wins when text had no length, or for multi-instance plan marks.
             has_explicit = existing not in ("", None) and not base.get("Length Method")
             if length is not None and not has_explicit:
                 base[length_key] = length
-                base["Length Method"] = f"parallel-{direction}"
-                if direction in ("vertical", "horizontal"):
-                    base["Member Direction"] = direction
+                if str(direction).startswith("spacing-"):
+                    base["Length Method"] = direction
+                    base["Member Direction"] = direction.replace("spacing-", "")
+                else:
+                    base["Length Method"] = f"parallel-{direction}"
+                    if direction in ("vertical", "horizontal"):
+                        base["Member Direction"] = direction
             elif has_explicit:
                 base["Length Method"] = base.get("Length Method") or "explicit-text"
                 if length is not None and direction in ("vertical", "horizontal"):
@@ -869,6 +1084,7 @@ def extract_beams_regex(
     text: str,
     page_no: int,
     geometry: Optional[dict[str, list]] = None,
+    scale: Optional[float] = None,
 ) -> list[dict[str, Any]]:
     """
     Extract beam rows.
@@ -879,18 +1095,18 @@ def extract_beams_regex(
     rows: list[dict[str, Any]] = []
     seen_spans: set[tuple[int, int]] = set()
     for m in BEAM_MARK_RE.finditer(text):
-        # Skip beam-mark matches that are actually bracing marks (BR1 contains B? no)
         # Guard: character before match must not make it part of BR/BP
         if m.start() > 0 and text[m.start() - 1].upper() in ("R", "P"):
-            # e.g. accidental match — BEAM_MARK should not hit BR, but be safe
             continue
-        mark = f"B{m.group(1).upper()}"
+        num = m.group(1)
+        if num.isdigit() and int(num) > 200:
+            continue
+        mark = f"B{num.upper()}"
         span = (m.start(), m.end())
         if span in seen_spans:
             continue
         seen_spans.add(span)
         window = _nearby_window(text, m.start(), m.end())
-        # Do NOT pull bay-pair diagonals into orthogonal beam lengths
         elevs = _elevations(window)
         length = _first_length(window)
         # Ignore lengths that clearly came from "3000x2000" bay pairs unless
@@ -898,8 +1114,6 @@ def extract_beams_regex(
         if BAY_PAIR_RE.search(window) and not re.search(
             r"\b(DIAGONAL|SLOPING|INCLINED|SLOPED)\b", window, re.IGNORECASE
         ):
-            # Prefer a single L= value; if only the pair exists, leave empty
-            # for geometry to fill from parallel dims.
             explicit = re.search(
                 r"(?:L|LEN(?:GTH)?)\s*[=:]\s*(\d{3,5}(?:\.\d+)?)",
                 window,
@@ -950,6 +1164,7 @@ def extract_beams_regex(
             length_key="Length (mm)",
             diagonal=False,
             text=text,
+            scale=scale,
         )
         for r in rows:
             r.setdefault("Page", page_no)
@@ -960,11 +1175,15 @@ def extract_columns_regex(
     text: str,
     page_no: int,
     geometry: Optional[dict[str, list]] = None,
+    scale: Optional[float] = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for m in COLUMN_MARK_RE.finditer(text):
-        mark = f"C{m.group(1).upper()}"
+        num = m.group(1)
+        if num.isdigit() and int(num) > 200:
+            continue
+        mark = f"C{num.upper()}"
         if mark in seen:
             continue
         seen.add(mark)
@@ -1002,6 +1221,7 @@ def extract_columns_regex(
             length_key="Height (mm)",
             diagonal=False,
             text=text,
+            scale=scale,
         )
         for r in rows:
             r.setdefault("Page", page_no)
@@ -1066,6 +1286,7 @@ def extract_bracings_regex(
     text: str,
     page_no: int,
     geometry: Optional[dict[str, list]] = None,
+    scale: Optional[float] = None,
 ) -> list[dict[str, Any]]:
     """
     Bracings (and any diagonally placed member) — length from triangle diagonal:
@@ -1117,6 +1338,7 @@ def extract_bracings_regex(
             length_key="Length (mm)",
             diagonal=True,
             text=text,
+            scale=scale,
         )
         for r in rows:
             r.setdefault("Page", page_no)
@@ -1398,17 +1620,33 @@ def process_pdf(
                 "base_plates": [],
                 "dims": [],
             }
+            # Graphics-layer dims (1500/2000/6000 etc.) via OCR — needed when the
+            # PDF text layer only has marks, not dimension strings.
+            if len(geometry.get("dims") or []) < 8:
+                ocr_dims = ocr_plan_dimensions(page)
+                geometry["dims"] = (geometry.get("dims") or []) + ocr_dims
+            scale = estimate_scale_mm_per_unit(page)
 
             # Regex + geometry pass
             if page_no in plan_set:
-                page_beams = extract_beams_regex(text, page_no, geometry=geometry)
+                page_beams = extract_beams_regex(
+                    text, page_no, geometry=geometry, scale=scale
+                )
                 page_beams = _apply_diagonal_override_for_sloping_beams(
                     page_beams, text, geometry
                 )
                 beams.extend(page_beams)
-                bracings.extend(extract_bracings_regex(text, page_no, geometry=geometry))
+                bracings.extend(
+                    extract_bracings_regex(
+                        text, page_no, geometry=geometry, scale=scale
+                    )
+                )
             if page_no in elev_set:
-                columns.extend(extract_columns_regex(text, page_no, geometry=geometry))
+                columns.extend(
+                    extract_columns_regex(
+                        text, page_no, geometry=geometry, scale=scale
+                    )
+                )
                 base_plates.extend(extract_base_plates_regex(text, page_no))
 
             # AI enrichment pass (optional)
