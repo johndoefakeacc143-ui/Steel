@@ -92,8 +92,10 @@ class PDFReader:
 
     @staticmethod
     def _page_to_image(page: pdfplumber.page.Page) -> np.ndarray | None:
+        # 150 dpi keeps dimension text legible for OCR (which downscales anyway)
+        # while rendering noticeably faster and using less memory on big drawings.
         try:
-            page_image = page.to_image(resolution=200)
+            page_image = page.to_image(resolution=150)
             pil_image = page_image.original
             return np.array(pil_image.convert("RGB"))
         except Exception:

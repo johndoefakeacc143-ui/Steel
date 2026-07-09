@@ -22,7 +22,13 @@ import logging
 import re
 from collections import Counter, defaultdict
 
+from src.bom_parser import DRAWING_MARK_PATTERN
+
 logger = logging.getLogger(__name__)
+
+# Cap the image long side before OCR (px). Larger renders are downscaled to keep
+# OCR fast on big multi-page drawing sets.
+_MAX_OCR_LONG_SIDE = 4500
 
 _MARK_RE = re.compile(r"^(B[2-9]|BR\d+|BP[12]|PB[1-9A-Z])$", re.IGNORECASE)
 _LINEAR_MARK_RE = re.compile(r"^(B[2-9]|BR\d+)$", re.IGNORECASE)
@@ -69,9 +75,15 @@ class DimensionEstimator:
             image = getattr(page, "image", None)
             if image is None:
                 continue
+            # Skip the expensive OCR on pages that have no member marks - there is
+            # nothing to attach a dimension to (big speed-up on multi-page sets).
+            if not self._page_has_marks(page):
+                logger.info(
+                    "Page %s/%s: no member marks - skipping dimension OCR", index, total
+                )
+                continue
             logger.info(
-                "Reading dimensions via OCR on page %s/%s (image %sx%s) - this can "
-                "take ~10-40s per page on large drawings...",
+                "Page %s/%s: reading dimensions via OCR (image %sx%s)...",
                 index,
                 total,
                 image.shape[1],
@@ -88,17 +100,34 @@ class DimensionEstimator:
                 page_defaults[page.page_number] = default
         return mark_lengths, page_defaults
 
+    @staticmethod
+    def _page_has_marks(page) -> bool:
+        if getattr(page, "stacked_marks", None):
+            return True
+        return bool(DRAWING_MARK_PATTERN.search(getattr(page, "text", "") or ""))
+
     def _estimate_page(self, image):
         import cv2
         import numpy as np
         import pytesseract
 
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        # Downscale very large renders before OCR: dimension text stays legible but
+        # OCR time drops roughly with the pixel count. Association is relative, so
+        # a uniform scale does not affect nearest-dimension matching.
+        long_side = max(gray.shape[:2])
+        if long_side > _MAX_OCR_LONG_SIDE:
+            scale = _MAX_OCR_LONG_SIDE / long_side
+            gray = cv2.resize(
+                gray, (int(gray.shape[1] * scale), int(gray.shape[0] * scale)),
+                interpolation=cv2.INTER_AREA,
+            )
         height = gray.shape[0]
 
         marks: list[tuple[str, float, float]] = []
         dims: list[tuple[int, float, float]] = []
 
+        logger.info("    horizontal OCR pass...")
         for text, cx, cy in self._ocr_tokens(gray, pytesseract):
             if _MARK_RE.match(text):
                 marks.append((text.upper(), cx, cy))
@@ -108,6 +137,7 @@ class DimensionEstimator:
                     dims.append((value, cx, cy))
 
         # Rotated pass recovers vertical dimension labels.
+        logger.info("    vertical OCR pass...")
         rotated = cv2.rotate(gray, cv2.ROTATE_90_CLOCKWISE)
         for text, cx, cy in self._ocr_tokens(rotated, pytesseract):
             if _DIM_RE.match(text):
