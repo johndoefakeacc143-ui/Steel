@@ -1379,21 +1379,29 @@ def ai_extract_from_text(text: str, page_no: int) -> dict[str, list[dict]]:
     """
     Call OpenAI (via langchain) to enrich extraction.
     Returns empty lists if no API key or on failure — regex results still apply.
+    Prints the raw AI response to the console for debugging.
     """
     empty = {"beams": [], "columns": [], "base_plates": [], "bracings": []}
     if not OPENAI_API_KEY or not text.strip():
+        reason = "OPENAI_API_KEY not set" if not OPENAI_API_KEY else "empty page text"
+        print(f"[AI extract] SKIPPED page {page_no} — {reason}")
         return empty
     try:
         from langchain_openai import ChatOpenAI
         from langchain_core.messages import HumanMessage, SystemMessage
+        import json
 
+        model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         llm = ChatOpenAI(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            model=model_name,
             temperature=0,
             api_key=OPENAI_API_KEY,
         )
         # Cap text to keep token usage reasonable on huge sheets
         clipped = text[:12000]
+        print(f"\n{'=' * 72}")
+        print(f"[AI extract] CALLING model={model_name} page={page_no} chars={len(clipped)}")
+        print(f"{'=' * 72}")
         resp = llm.invoke(
             [
                 SystemMessage(content=AI_SYSTEM_PROMPT),
@@ -1403,20 +1411,35 @@ def ai_extract_from_text(text: str, page_no: int) -> dict[str, list[dict]]:
             ]
         )
         content = resp.content if isinstance(resp.content, str) else str(resp.content)
-        # Strip optional ```json fences
-        content = re.sub(r"^```(?:json)?\s*", "", content.strip())
-        content = re.sub(r"\s*```$", "", content)
-        import json
 
-        data = json.loads(content)
-        return {
+        # --- Console dump: raw AI return ---
+        print(f"\n[AI extract] RAW RESPONSE page {page_no} ({len(content)} chars):")
+        print("-" * 72)
+        print(content)
+        print("-" * 72)
+
+        # Strip optional ```json fences
+        cleaned = re.sub(r"^```(?:json)?\s*", "", content.strip())
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+
+        data = json.loads(cleaned)
+        parsed = {
             "beams": data.get("beams") or [],
             "columns": data.get("columns") or [],
             "base_plates": data.get("base_plates") or data.get("basePlates") or [],
             "bracings": data.get("bracings") or [],
         }
+        print(
+            f"[AI extract] PARSED page {page_no}: "
+            f"beams={len(parsed['beams'])} columns={len(parsed['columns'])} "
+            f"base_plates={len(parsed['base_plates'])} bracings={len(parsed['bracings'])}"
+        )
+        print(f"[AI extract] PARSED JSON page {page_no}:")
+        print(json.dumps(parsed, indent=2, default=str))
+        print(f"{'=' * 72}\n")
+        return parsed
     except Exception as exc:  # noqa: BLE001
-        print(f"[AI extract warning page {page_no}] {exc}")
+        print(f"[AI extract] ERROR page {page_no}: {exc}")
         return empty
 
 
@@ -1882,11 +1905,15 @@ def build_summary(
             from langchain_openai import ChatOpenAI
             from langchain_core.messages import HumanMessage, SystemMessage
 
+            model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
             llm = ChatOpenAI(
-                model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+                model=model_name,
                 temperature=0.2,
                 api_key=OPENAI_API_KEY,
             )
+            print(f"\n{'=' * 72}")
+            print(f"[AI summary] CALLING model={model_name}")
+            print(f"{'=' * 72}")
             polish = llm.invoke(
                 [
                     SystemMessage(
@@ -1900,10 +1927,17 @@ def build_summary(
                 ]
             )
             polished = polish.content if isinstance(polish.content, str) else str(polish.content)
+            print(f"\n[AI summary] RAW RESPONSE ({len(polished)} chars):")
+            print("-" * 72)
+            print(polished)
+            print("-" * 72)
+            print(f"{'=' * 72}\n")
             if polished.strip():
                 engineer_notes = polished.strip()
         except Exception as exc:  # noqa: BLE001
-            print(f"[AI summary warning] {exc}")
+            print(f"[AI summary] ERROR: {exc}")
+    else:
+        print("[AI summary] SKIPPED — OPENAI_API_KEY not set")
 
     add("Engineer Notes", "Narrative", engineer_notes)
     return rows, engineer_notes
