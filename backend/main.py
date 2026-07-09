@@ -21,7 +21,7 @@ import pandas as pd
 import pdfplumber
 import pytesseract
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from PIL import Image
@@ -1096,14 +1096,54 @@ def build_excel_bytes(
 # Core pipeline — page by page
 # ===========================================================================
 
-def process_pdf(pdf_path: str) -> tuple[bytes, dict[str, Any]]:
-    all_beams: list[dict[str, Any]] = []
-    all_columns: list[dict[str, Any]] = []
-    all_plates: list[dict[str, Any]] = []
-    all_bracing: list[dict[str, Any]] = []
-    page_sources: list[str] = []
-    page_types: list[dict[str, Any]] = []
+def _parse_page_list(raw: str | None, total_pages: int) -> list[int] | None:
+    """Parse '1,3,5-7' / '1 2 3' into validated 1-based page numbers."""
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    pages: set[int] = set()
+    for part in re.split(r"[,\s]+", text):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            ends = part.split("-", 1)
+            try:
+                start, end = int(ends[0]), int(ends[1])
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid page range: {part}",
+                ) from exc
+            if start > end:
+                start, end = end, start
+            for n in range(start, end + 1):
+                pages.add(n)
+        else:
+            try:
+                pages.add(int(part))
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid page number: {part}",
+                ) from exc
+    invalid = sorted(p for p in pages if p < 1 or p > total_pages)
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Page(s) out of range (1–{total_pages}): {invalid}",
+        )
+    return sorted(pages)
 
+
+def inspect_pdf_pages(pdf_path: str) -> dict[str, Any]:
+    """
+    Fast page inventory for the UI picker.
+    Uses digital text when available; does not OCR every page.
+    """
+    pages_info: list[dict[str, Any]] = []
     with pdfplumber.open(pdf_path) as pdf:
         total_pages = len(pdf.pages)
         if total_pages == 0:
@@ -1111,7 +1151,96 @@ def process_pdf(pdf_path: str) -> tuple[bytes, dict[str, Any]]:
 
         for index, page in enumerate(pdf.pages):
             page_num = index + 1
+            digital = ""
+            try:
+                digital = page.extract_text() or ""
+            except Exception:
+                digital = ""
+            source = "digital" if len(digital.strip()) >= DIGITAL_TEXT_THRESHOLD else "unknown"
+            suggested = detect_page_type(digital) if digital.strip() else "Other"
+            # Title-ish snippet from the first non-empty lines
+            lines = [ln.strip() for ln in digital.splitlines() if ln.strip()]
+            title = " ".join(lines[:2])[:120] if lines else f"Page {page_num}"
+            pages_info.append(
+                {
+                    "page": page_num,
+                    "suggested_type": suggested,
+                    "title": title,
+                    "source": source,
+                }
+            )
+            page.close()
+
+    suggested_plan = [p["page"] for p in pages_info if p["suggested_type"] == "Plan"]
+    suggested_elev = [p["page"] for p in pages_info if p["suggested_type"] == "Elevation"]
+    return {
+        "pages": total_pages,
+        "page_list": pages_info,
+        "suggested_plan_pages": suggested_plan,
+        "suggested_elevation_pages": suggested_elev,
+    }
+
+
+def process_pdf(
+    pdf_path: str,
+    plan_pages: list[int] | None = None,
+    elevation_pages: list[int] | None = None,
+) -> tuple[bytes, dict[str, Any]]:
+    """
+    Extract steel members from a PDF.
+
+    If plan_pages / elevation_pages are provided (user selection), those pages
+    are treated as Plan / Elevation regardless of auto-detect.
+    """
+    all_beams: list[dict[str, Any]] = []
+    all_columns: list[dict[str, Any]] = []
+    all_plates: list[dict[str, Any]] = []
+    all_bracing: list[dict[str, Any]] = []
+    page_sources: list[str] = []
+    page_types: list[dict[str, Any]] = []
+
+    plan_set = set(plan_pages or [])
+    elev_set = set(elevation_pages or [])
+    user_selected = bool(plan_set or elev_set)
+
+    with pdfplumber.open(pdf_path) as pdf:
+        total_pages = len(pdf.pages)
+        if total_pages == 0:
+            raise HTTPException(status_code=400, detail="PDF has no pages.")
+
+        # Validate selections against actual page count
+        if plan_pages is not None:
+            bad = [p for p in plan_pages if p < 1 or p > total_pages]
+            if bad:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Plan page(s) out of range (1–{total_pages}): {bad}",
+                )
+        if elevation_pages is not None:
+            bad = [p for p in elevation_pages if p < 1 or p > total_pages]
+            if bad:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Elevation page(s) out of range (1–{total_pages}): {bad}",
+                )
+
+        for index, page in enumerate(pdf.pages):
+            page_num = index + 1
             print(f"[Process] Page {page_num}/{total_pages}")
+
+            # When user picked pages, skip unselected sheets (faster on large PDFs)
+            if user_selected and page_num not in plan_set and page_num not in elev_set:
+                page_types.append(
+                    {
+                        "page": page_num,
+                        "type": "Skipped",
+                        "source": "skipped",
+                        "role": "none",
+                    }
+                )
+                page_sources.append("skipped")
+                page.close()
+                continue
 
             text, source = extract_page_text(page)
             page_sources.append(source)
@@ -1122,8 +1251,29 @@ def process_pdf(pdf_path: str) -> tuple[bytes, dict[str, Any]]:
             if table_text:
                 combined = f"{text}\n\n--- TABLES ---\n{table_text}"
 
-            page_type = detect_page_type(combined)
-            page_types.append({"page": page_num, "type": page_type, "source": source})
+            auto_type = detect_page_type(combined)
+            if page_num in plan_set:
+                page_type = "Plan"
+            elif page_num in elev_set:
+                page_type = "Elevation"
+            else:
+                page_type = auto_type
+
+            page_types.append(
+                {
+                    "page": page_num,
+                    "type": page_type,
+                    "source": source,
+                    "auto_type": auto_type,
+                    "role": (
+                        "plan"
+                        if page_type == "Plan"
+                        else "elevation"
+                        if page_type == "Elevation"
+                        else "other"
+                    ),
+                }
+            )
             print(f"[Process] Page {page_num} classified as {page_type}")
 
             # Step 2a: Regex extraction routed by page type
@@ -1174,7 +1324,26 @@ def process_pdf(pdf_path: str) -> tuple[bytes, dict[str, Any]]:
     plates = _merge_by_mark(all_plates)
     bracing = _merge_by_mark(all_bracing)
 
-    view_metrics = build_view_metrics(page_types, beams, bracing, columns)
+    # Force view metrics to use user-selected pages when provided
+    metrics_page_types = []
+    for p in page_types:
+        if p["type"] == "Skipped":
+            continue
+        metrics_page_types.append(p)
+    if user_selected:
+        # Ensure selected pages appear even if somehow missing
+        for p in sorted(plan_set):
+            if not any(x["page"] == p and x["type"] == "Plan" for x in metrics_page_types):
+                metrics_page_types.append({"page": p, "type": "Plan"})
+        for p in sorted(elev_set):
+            if not any(x["page"] == p and x["type"] == "Elevation" for x in metrics_page_types):
+                metrics_page_types.append({"page": p, "type": "Elevation"})
+
+    view_metrics = build_view_metrics(metrics_page_types, beams, bracing, columns)
+    view_metrics["user_selected"] = user_selected
+    view_metrics["selected_plan_pages"] = sorted(plan_set)
+    view_metrics["selected_elevation_pages"] = sorted(elev_set)
+
     excel_bytes = build_excel_bytes(
         beams, columns, plates, bracing=bracing, view_metrics=view_metrics
     )
@@ -1222,11 +1391,70 @@ def health():
     }
 
 
+@app.post("/api/inspect")
+async def inspect_pdf(file: UploadFile = File(...)):
+    """
+    Return page count + suggested Plan/Elevation pages for the UI picker.
+    Does not run full extraction / OCR on every page.
+    """
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
+
+    tmp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp_path = tmp.name
+            total = 0
+            chunk_size = 1024 * 1024
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="File exceeds the 500MB upload limit.",
+                    )
+                tmp.write(chunk)
+
+        if total == 0:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+        info = inspect_pdf_pages(tmp_path)
+        return {
+            "filename": file.filename,
+            **info,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to inspect PDF: {exc}",
+        ) from exc
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
 @app.post("/api/upload")
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload_pdf(
+    file: UploadFile = File(...),
+    plan_pages: str | None = Form(None),
+    elevation_pages: str | None = Form(None),
+):
     """
     Accept a steel drawing PDF (up to 500MB), extract members page-by-page,
     and return an Excel file with Beams / Columns / BasePlates / Summary sheets.
+
+    Optional form fields:
+      plan_pages       — e.g. "1,3" pages for beam + bracing details
+      elevation_pages  — e.g. "2,5" pages for column details
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file name provided.")
@@ -1257,7 +1485,16 @@ async def upload_pdf(file: UploadFile = File(...)):
         if total == 0:
             raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-        excel_bytes, meta = process_pdf(tmp_path)
+        with pdfplumber.open(tmp_path) as pdf:
+            total_pages = len(pdf.pages)
+        plan_list = _parse_page_list(plan_pages, total_pages)
+        elev_list = _parse_page_list(elevation_pages, total_pages)
+
+        excel_bytes, meta = process_pdf(
+            tmp_path,
+            plan_pages=plan_list,
+            elevation_pages=elev_list,
+        )
 
         # Also expose JSON preview via custom headers (small counts) —
         # the Excel is the primary download payload.
@@ -1296,10 +1533,18 @@ async def upload_pdf(file: UploadFile = File(...)):
 
 
 @app.post("/api/extract")
-async def extract_preview(file: UploadFile = File(...)):
+async def extract_preview(
+    file: UploadFile = File(...),
+    plan_pages: str | None = Form(None),
+    elevation_pages: str | None = Form(None),
+):
     """
     Same pipeline as /api/upload but returns JSON preview for the UI table,
     plus a base64 Excel payload for download.
+
+    Optional form fields:
+      plan_pages       — pages for beam + bracing details (e.g. "1,3")
+      elevation_pages  — pages for column / elevation details (e.g. "2")
     """
     import base64
 
@@ -1327,7 +1572,25 @@ async def extract_preview(file: UploadFile = File(...)):
         if total == 0:
             raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-        excel_bytes, meta = process_pdf(tmp_path)
+        with pdfplumber.open(tmp_path) as pdf:
+            total_pages = len(pdf.pages)
+        plan_list = _parse_page_list(plan_pages, total_pages)
+        elev_list = _parse_page_list(elevation_pages, total_pages)
+
+        if plan_list is None and elev_list is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Please select at least one Plan page (beams/bracing) "
+                    "and/or one Elevation page (columns)."
+                ),
+            )
+
+        excel_bytes, meta = process_pdf(
+            tmp_path,
+            plan_pages=plan_list,
+            elevation_pages=elev_list,
+        )
         download_name = Path(file.filename).stem + "_SteelDraw_Extract.xlsx"
 
         return {
@@ -1336,6 +1599,8 @@ async def extract_preview(file: UploadFile = File(...)):
             "pdf_type": meta["pdf_type"],
             "page_types": meta.get("page_types", []),
             "view_metrics": meta.get("view_metrics", {}),
+            "selected_plan_pages": plan_list or [],
+            "selected_elevation_pages": elev_list or [],
             "beams": meta["beams"],
             "columns": meta["columns"],
             "base_plates": meta["base_plates"],

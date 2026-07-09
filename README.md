@@ -141,8 +141,9 @@ Key variables:
 ## UI flow
 
 1. **Upload** — drag & drop PDF, shows file name + size
-2. **Loading** — progress bar: “AI is reading your drawing…”
-3. **Results** — table preview tabs + **Download Excel**
+2. **Choose pages** — pick which pages are Plan (beams/bracing) and which are Elevation (columns)
+3. **Loading** — progress bar: “AI is reading your drawing…”
+4. **Results** — Plan metrics + Elevation metrics, table tabs + **Download Excel**
 
 ## Notes
 

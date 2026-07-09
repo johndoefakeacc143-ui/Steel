@@ -6,6 +6,7 @@ const MAX_BYTES = 500 * 1024 * 1024;
 
 const STEPS = {
   UPLOAD: "upload",
+  SELECT: "select",
   LOADING: "loading",
   RESULTS: "results",
 };
@@ -200,8 +201,171 @@ function UploadScreen({ file, setFile, onStart, error, setError }) {
         className="animate-rise mt-8 bg-steel-900 px-10 py-3.5 font-display text-lg font-semibold uppercase tracking-[0.14em] text-white transition hover:bg-steel-800 disabled:cursor-not-allowed disabled:bg-steel-300"
         style={{ animationDelay: "260ms" }}
       >
-        Extract with AI
+        Continue — choose pages
       </button>
+    </section>
+  );
+}
+
+function togglePage(list, page) {
+  if (list.includes(page)) return list.filter((p) => p !== page);
+  return [...list, page].sort((a, b) => a - b);
+}
+
+function PageSelectScreen({
+  file,
+  inspect,
+  planPages,
+  setPlanPages,
+  elevPages,
+  setElevPages,
+  onBack,
+  onExtract,
+  error,
+  inspecting,
+}) {
+  const pageList = inspect?.page_list || [];
+  const total = inspect?.pages || 0;
+
+  return (
+    <section className="mx-auto w-full max-w-3xl px-5 pb-20 pt-10">
+      <BrandMark className="mb-8" />
+
+      <h1 className="font-display text-3xl font-semibold uppercase tracking-wide text-steel-900 sm:text-4xl">
+        Choose pages
+      </h1>
+      <p className="mt-3 text-steel-600">
+        Tell SteelDraw which sheets to read. File:{" "}
+        <span className="font-semibold text-steel-800">{file?.name}</span>
+        {total ? ` · ${total} pages` : ""}
+      </p>
+
+      {inspecting && (
+        <p className="mt-6 text-sm text-steel-500">Reading page list…</p>
+      )}
+
+      {!inspecting && (
+        <>
+          <div className="mt-8 border border-ember-500/40 bg-white/80 px-5 py-5">
+            <p className="font-display text-xl font-semibold uppercase tracking-wide text-steel-900">
+              1. Plan pages — beams & bracing
+            </p>
+            <p className="mt-1 text-sm text-steel-500">
+              Which page(s) have the framing plan for beam and bracing details?
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {pageList.map((p) => {
+                const selected = planPages.includes(p.page);
+                const suggested = p.suggested_type === "Plan";
+                return (
+                  <button
+                    key={`plan-${p.page}`}
+                    type="button"
+                    onClick={() => setPlanPages(togglePage(planPages, p.page))}
+                    className={`min-w-[3.25rem] border px-3 py-2 font-display text-lg font-semibold transition ${
+                      selected
+                        ? "border-ember-500 bg-ember-500 text-white"
+                        : suggested
+                          ? "border-ember-400/50 bg-ember-500/10 text-steel-900"
+                          : "border-steel-300 bg-white text-steel-700 hover:border-steel-500"
+                    }`}
+                    title={p.title}
+                  >
+                    {p.page}
+                  </button>
+                );
+              })}
+            </div>
+            {planPages.length > 0 && (
+              <p className="mt-3 text-sm font-semibold text-steel-700">
+                Selected: {planPages.join(", ")}
+              </p>
+            )}
+          </div>
+
+          <div className="mt-5 border border-steel-400 bg-white/80 px-5 py-5">
+            <p className="font-display text-xl font-semibold uppercase tracking-wide text-steel-900">
+              2. Elevation pages — columns
+            </p>
+            <p className="mt-1 text-sm text-steel-500">
+              Which page(s) have the elevation for column details?
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {pageList.map((p) => {
+                const selected = elevPages.includes(p.page);
+                const suggested = p.suggested_type === "Elevation";
+                return (
+                  <button
+                    key={`elev-${p.page}`}
+                    type="button"
+                    onClick={() => setElevPages(togglePage(elevPages, p.page))}
+                    className={`min-w-[3.25rem] border px-3 py-2 font-display text-lg font-semibold transition ${
+                      selected
+                        ? "border-steel-800 bg-steel-800 text-white"
+                        : suggested
+                          ? "border-steel-400 bg-steel-100 text-steel-900"
+                          : "border-steel-300 bg-white text-steel-700 hover:border-steel-500"
+                    }`}
+                    title={p.title}
+                  >
+                    {p.page}
+                  </button>
+                );
+              })}
+            </div>
+            {elevPages.length > 0 && (
+              <p className="mt-3 text-sm font-semibold text-steel-700">
+                Selected: {elevPages.join(", ")}
+              </p>
+            )}
+          </div>
+
+          {pageList.some((p) => p.title) && (
+            <div className="mt-6 border border-steel-200 bg-white/60 px-4 py-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-steel-400">
+                Page titles (from PDF text)
+              </p>
+              <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-sm text-steel-600">
+                {pageList.map((p) => (
+                  <li key={`title-${p.page}`}>
+                    <span className="font-semibold text-steel-800">p.{p.page}</span>
+                    {p.suggested_type !== "Other" ? ` [${p.suggested_type}]` : ""}
+                    {" — "}
+                    {p.title || "—"}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
+
+      {error && (
+        <div
+          role="alert"
+          className="mt-5 border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800"
+        >
+          {error}
+        </div>
+      )}
+
+      <div className="mt-8 flex flex-wrap gap-3">
+        <button
+          type="button"
+          onClick={onBack}
+          className="border border-steel-300 bg-white px-6 py-3 text-sm font-semibold uppercase tracking-wide text-steel-700 hover:border-steel-500"
+        >
+          Back
+        </button>
+        <button
+          type="button"
+          disabled={inspecting || (planPages.length === 0 && elevPages.length === 0)}
+          onClick={onExtract}
+          className="bg-steel-900 px-8 py-3 font-display text-lg font-semibold uppercase tracking-[0.14em] text-white transition hover:bg-steel-800 disabled:cursor-not-allowed disabled:bg-steel-300"
+        >
+          Extract with AI
+        </button>
+      </div>
     </section>
   );
 }
@@ -342,8 +506,17 @@ function ResultsScreen({ result, onReset, onDownload }) {
     "Page",
   ];
 
-  const planPages = (metrics.plan_pages || []).join(", ") || "—";
-  const elevPages = (metrics.elevation_pages || []).join(", ") || "—";
+  const planPages =
+    (result.selected_plan_pages || metrics.selected_plan_pages || metrics.plan_pages || []).join(
+      ", "
+    ) || "—";
+  const elevPages =
+    (
+      result.selected_elevation_pages ||
+      metrics.selected_elevation_pages ||
+      metrics.elevation_pages ||
+      []
+    ).join(", ") || "—";
 
   return (
     <section className="mx-auto w-full max-w-6xl px-5 pb-20 pt-8">
@@ -477,6 +650,10 @@ export default function App() {
   const [error, setError] = useState("");
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState(null);
+  const [inspect, setInspect] = useState(null);
+  const [planPages, setPlanPages] = useState([]);
+  const [elevPages, setElevPages] = useState([]);
+  const [inspecting, setInspecting] = useState(false);
   const progressTimer = useRef(null);
 
   useEffect(() => {
@@ -505,14 +682,54 @@ export default function App() {
     setProgress(finalValue);
   };
 
+  const handleContinueToSelect = async () => {
+    if (!file) return;
+    setError("");
+    setInspecting(true);
+    setStep(STEPS.SELECT);
+    setInspect(null);
+    setPlanPages([]);
+    setElevPages([]);
+
+    const form = new FormData();
+    form.append("file", file);
+
+    try {
+      const response = await axios.post(`${API_BASE}/api/inspect`, form, {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 5 * 60 * 1000,
+      });
+      const data = response.data;
+      setInspect(data);
+      // Pre-select suggested pages; user can change them
+      setPlanPages(data.suggested_plan_pages || []);
+      setElevPages(data.suggested_elevation_pages || []);
+    } catch (err) {
+      const detail =
+        err.response?.data?.detail ||
+        err.message ||
+        "Could not read PDF pages.";
+      setError(typeof detail === "string" ? detail : JSON.stringify(detail));
+      setStep(STEPS.UPLOAD);
+    } finally {
+      setInspecting(false);
+    }
+  };
+
   const handleExtract = async () => {
     if (!file) return;
+    if (planPages.length === 0 && elevPages.length === 0) {
+      setError("Select at least one Plan page and/or one Elevation page.");
+      return;
+    }
     setError("");
     setStep(STEPS.LOADING);
     startFakeProgress();
 
     const form = new FormData();
     form.append("file", file);
+    if (planPages.length) form.append("plan_pages", planPages.join(","));
+    if (elevPages.length) form.append("elevation_pages", elevPages.join(","));
 
     try {
       const response = await axios.post(`${API_BASE}/api/extract`, form, {
@@ -535,7 +752,7 @@ export default function App() {
         err.message ||
         "Something went wrong while processing the drawing.";
       setError(typeof detail === "string" ? detail : JSON.stringify(detail));
-      setStep(STEPS.UPLOAD);
+      setStep(STEPS.SELECT);
     }
   };
 
@@ -548,6 +765,9 @@ export default function App() {
     setStep(STEPS.UPLOAD);
     setFile(null);
     setResult(null);
+    setInspect(null);
+    setPlanPages([]);
+    setElevPages([]);
     setError("");
     setProgress(0);
   };
@@ -560,9 +780,26 @@ export default function App() {
           <UploadScreen
             file={file}
             setFile={setFile}
-            onStart={handleExtract}
+            onStart={handleContinueToSelect}
             error={error}
             setError={setError}
+          />
+        )}
+        {step === STEPS.SELECT && (
+          <PageSelectScreen
+            file={file}
+            inspect={inspect}
+            planPages={planPages}
+            setPlanPages={setPlanPages}
+            elevPages={elevPages}
+            setElevPages={setElevPages}
+            onBack={() => {
+              setError("");
+              setStep(STEPS.UPLOAD);
+            }}
+            onExtract={handleExtract}
+            error={error}
+            inspecting={inspecting}
           />
         )}
         {step === STEPS.LOADING && (
