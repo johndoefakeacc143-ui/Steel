@@ -284,12 +284,36 @@ function DataTable({ columns, rows, emptyLabel }) {
   );
 }
 
+function MetricBlock({ title, items, accent = "ember" }) {
+  const border =
+    accent === "steel" ? "border-steel-400" : "border-ember-500";
+  return (
+    <div className={`border ${border} bg-white/80 px-5 py-5`}>
+      <p className="font-display text-xl font-semibold uppercase tracking-wide text-steel-900">
+        {title}
+      </p>
+      <dl className="mt-4 space-y-3">
+        {items.map((item) => (
+          <div key={item.label} className="flex items-baseline justify-between gap-4 border-b border-steel-100 pb-2">
+            <dt className="text-sm text-steel-500">{item.label}</dt>
+            <dd className="font-display text-2xl font-semibold text-steel-900">{item.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
 function ResultsScreen({ result, onReset, onDownload }) {
   const [tab, setTab] = useState("Beams");
+  const metrics = result.view_metrics || {};
+  const plan = metrics.plan || {};
+  const elev = metrics.elevation || {};
 
   const tabs = useMemo(
     () => [
       { id: "Beams", count: result.beams?.length || 0 },
+      { id: "Bracing", count: result.bracing?.length || 0 },
       { id: "Columns", count: result.columns?.length || 0 },
       { id: "BasePlates", count: result.base_plates?.length || 0 },
       { id: "Summary", count: result.summary?.length || 0 },
@@ -298,6 +322,7 @@ function ResultsScreen({ result, onReset, onDownload }) {
   );
 
   const beamCols = ["Mark", "Section Size", "Length", "Material", "Start EL", "End EL", "Page"];
+  const braceCols = ["Mark", "Section Size", "Length", "Material", "Page"];
   const colCols = [
     "Mark",
     "Section Size",
@@ -316,6 +341,9 @@ function ResultsScreen({ result, onReset, onDownload }) {
     "Top of Concrete EL",
     "Page",
   ];
+
+  const planPages = (metrics.plan_pages || []).join(", ") || "—";
+  const elevPages = (metrics.elevation_pages || []).join(", ") || "—";
 
   return (
     <section className="mx-auto w-full max-w-6xl px-5 pb-20 pt-8">
@@ -339,27 +367,59 @@ function ResultsScreen({ result, onReset, onDownload }) {
         </div>
       </div>
 
-      <div className="animate-rise mt-8 grid gap-3 sm:grid-cols-4">
-        {[
-          { label: "Beams", value: result.beams?.length || 0 },
-          { label: "Columns", value: result.columns?.length || 0 },
-          { label: "Base plates", value: result.base_plates?.length || 0 },
-          { label: "Pages", value: result.pages || 0 },
-        ].map((stat) => (
-          <div key={stat.label} className="border border-steel-200 bg-white/70 px-4 py-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-steel-400">
-              {stat.label}
-            </p>
-            <p className="mt-1 font-display text-3xl font-semibold text-steel-900">{stat.value}</p>
-          </div>
-        ))}
+      {/* Plan first, then Elevation — primary answer for the user */}
+      <div className="animate-rise mt-8 grid gap-4 lg:grid-cols-2">
+        <MetricBlock
+          title={`1. Plan page (p. ${planPages})`}
+          accent="ember"
+          items={[
+            { label: "Beam count", value: plan.beam_count ?? 0 },
+            {
+              label: "Beam length",
+              value: plan.beam_length_ft_in
+                ? `${plan.beam_length_ft_in}  ·  ${plan.beam_length_m ?? 0} m`
+                : "N/A",
+            },
+            { label: "Bracing count", value: plan.bracing_count ?? 0 },
+            {
+              label: "Bracing length",
+              value: plan.bracing_length_ft_in
+                ? `${plan.bracing_length_ft_in}  ·  ${plan.bracing_length_m ?? 0} m`
+                : "N/A",
+            },
+          ]}
+        />
+        <MetricBlock
+          title={`2. Elevation page (p. ${elevPages})`}
+          accent="steel"
+          items={[
+            { label: "Column count", value: elev.column_count ?? 0 },
+            {
+              label: "Column length",
+              value: elev.column_length_ft_in
+                ? `${elev.column_length_ft_in}  ·  ${elev.column_length_m ?? 0} m`
+                : "N/A",
+            },
+          ]}
+        />
       </div>
 
       <p className="mt-4 text-sm text-steel-500">
         PDF type: <span className="font-semibold text-steel-700">{result.pdf_type || "unknown"}</span>
         {" · "}
+        Pages: <span className="font-semibold text-steel-700">{result.pages || 0}</span>
+        {" · "}
         File: <span className="font-semibold text-steel-700">{result.filename}</span>
       </p>
+
+      {(result.page_types || []).length > 0 && (
+        <p className="mt-2 text-sm text-steel-500">
+          Detected sheets:{" "}
+          {(result.page_types || [])
+            .map((p) => `p.${p.page}=${p.type}`)
+            .join(" · ")}
+        </p>
+      )}
 
       <div className="mt-8 flex flex-wrap gap-2 border-b border-steel-200 pb-px">
         {tabs.map((t) => (
@@ -381,6 +441,13 @@ function ResultsScreen({ result, onReset, onDownload }) {
       <div className="mt-5 animate-rise">
         {tab === "Beams" && (
           <DataTable columns={beamCols} rows={result.beams} emptyLabel="No beams detected." />
+        )}
+        {tab === "Bracing" && (
+          <DataTable
+            columns={braceCols}
+            rows={result.bracing}
+            emptyLabel="No bracing detected."
+          />
         )}
         {tab === "Columns" && (
           <DataTable columns={colCols} rows={result.columns} emptyLabel="No columns detected." />

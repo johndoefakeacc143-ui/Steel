@@ -78,9 +78,9 @@ SECTION_SIZE_RE = re.compile(
 )
 
 # Piece marks: B1, B-12, BM-3A, C1, COL-2, BP1, BP-01, etc.
-# NOTE: Beam pattern uses B(?!P) so base-plate marks (BP/BPL) are not captured as beams.
+# NOTE: Beam pattern excludes BP (base plates) and BR/XB (bracing).
 BEAM_MARK_RE = re.compile(
-    r"\b(?:BEAM|BM|B(?!P))([-\s]?[A-Z]?\d{1,4}[A-Z]?)\b",
+    r"\b(?:BEAM|BM|B(?![PR]))([-\s]?[A-Z]?\d{1,4}[A-Z]?)\b",
     re.IGNORECASE,
 )
 COLUMN_MARK_RE = re.compile(
@@ -89,6 +89,24 @@ COLUMN_MARK_RE = re.compile(
 )
 BASEPLATE_MARK_RE = re.compile(
     r"\b(?:BPL|BP|BASE\s*PLATE)([-\s]?[A-Z]?\d{1,4}[A-Z]?)\b",
+    re.IGNORECASE,
+)
+# Bracing marks: BR1, BR-2, BRACE-3, XB1, etc.
+BRACING_MARK_RE = re.compile(
+    r"\b(?:BRACE|BRACING|BR|XB)([-\s]?[A-Z]?\d{1,4}[A-Z]?)\b",
+    re.IGNORECASE,
+)
+
+# Page-type keywords — edit if your title blocks use different wording
+PLAN_PAGE_RE = re.compile(
+    r"\b(?:FLOOR\s+FRAMING|FRAMING\s+PLAN|ROOF\s+PLAN|FOUNDATION\s+PLAN|"
+    r"STRUCTURAL\s+PLAN|PLAN\s*[-–]|PLAN\b|"
+    r"UTILITY\s+SUPPORT\s+PLAN)\b",
+    re.IGNORECASE,
+)
+ELEVATION_PAGE_RE = re.compile(
+    r"\b(?:ELEVATION|BRACE\s+FRAME\s+ELEV|FRAME\s+ELEVATION|"
+    r"BUILDING\s+ELEVATION|SECTION\s+ELEVATION)\b",
     re.IGNORECASE,
 )
 
@@ -201,6 +219,64 @@ def extract_page_text(page: pdfplumber.page.Page) -> tuple[str, str]:
     return (ocr_page_image(page), "ocr")
 
 
+def detect_page_type(text: str) -> str:
+    """
+    Classify a drawing page as Plan, Elevation, or Other.
+
+    Priority: Elevation title wins over Plan if both appear (e.g. keyplan
+    notes on an elevation sheet). Edit PLAN_PAGE_RE / ELEVATION_PAGE_RE above.
+    """
+    head = (text or "")[:2500]
+    elev_hit = bool(ELEVATION_PAGE_RE.search(head))
+    plan_hit = bool(PLAN_PAGE_RE.search(head))
+    if elev_hit and not plan_hit:
+        return "Elevation"
+    if plan_hit and not elev_hit:
+        return "Plan"
+    if elev_hit and plan_hit:
+        # Prefer whichever keyword appears first in the title block area
+        elev_pos = ELEVATION_PAGE_RE.search(head)
+        plan_pos = PLAN_PAGE_RE.search(head)
+        if elev_pos and plan_pos:
+            return "Elevation" if elev_pos.start() < plan_pos.start() else "Plan"
+        return "Elevation" if elev_pos else "Plan"
+    # Heuristic fallback from content density
+    beamish = len(SECTION_SIZE_RE.findall(text or ""))
+    colish = len(COLUMN_MARK_RE.findall(text or ""))
+    if colish >= 2 and beamish <= colish:
+        return "Elevation"
+    if beamish >= 3:
+        return "Plan"
+    return "Other"
+
+
+def _format_length_ft_in(meters: float) -> str:
+    """Format meters as feet-inches for display (e.g. 45.72 -> 150'-0\")."""
+    total_inches = meters / 0.0254
+    feet = int(total_inches // 12)
+    inches = int(round(total_inches % 12))
+    if inches == 12:
+        feet += 1
+        inches = 0
+    return f"{feet}'-{inches}\""
+
+
+def _total_length_stats(rows: list[dict[str, Any]], length_key: str = "Length") -> dict[str, Any]:
+    total_m = 0.0
+    counted = 0
+    for row in rows:
+        length_m = _parse_length_to_meters(str(row.get(length_key, "")))
+        if length_m is not None:
+            total_m += length_m
+            counted += 1
+    return {
+        "count": len(rows),
+        "with_length": counted,
+        "total_length_m": round(total_m, 3) if total_m else 0.0,
+        "total_length_ft_in": _format_length_ft_in(total_m) if total_m else "N/A",
+    }
+
+
 # ===========================================================================
 # Camelot table extraction (optional — fails gracefully if ghostscript missing)
 # ===========================================================================
@@ -307,6 +383,16 @@ def _mark_from_match(match: re.Match[str], kind: str) -> str:
             raw = "C" + raw
         return raw
 
+    if kind == "bracing":
+        raw = re.sub(r"^BRACING-?", "BR", raw)
+        raw = re.sub(r"^BRACE-?", "BR", raw)
+        if raw.startswith("XB"):
+            return raw
+        raw = re.sub(r"^BR+", "BR", raw)
+        if not raw.startswith("BR"):
+            raw = "BR" + raw
+        return raw
+
     # base plate
     raw = raw.replace("BASEPLATE", "BP")
     return raw
@@ -348,7 +434,10 @@ def extract_beams_regex(text: str, page_num: int) -> list[dict[str, Any]]:
 
         for mark_m in BEAM_MARK_RE.finditer(line):
             mark = _mark_from_match(mark_m, "beam")
-            if mark.startswith("BP") or mark in seen:
+            if mark.startswith(("BP", "BR", "XB")) or mark in seen:
+                continue
+            # Skip lines that are clearly bracing rows
+            if re.search(r"\b(?:BRACING|BRACE)\b", line, re.IGNORECASE):
                 continue
             seen.add(mark)
 
@@ -457,6 +546,103 @@ def extract_baseplates_regex(text: str, page_num: int) -> list[dict[str, Any]]:
                 }
             )
     return plates
+
+
+def extract_bracing_regex(text: str, page_num: int) -> list[dict[str, Any]]:
+    """Extract bracing members (BR1, BRACE-2, HSS braces on plan)."""
+    braces: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for line in _iter_context_lines(text):
+        # Skip legend-only lines that mention bracing without a member
+        if re.search(r"\bBRACE\s+FRAME\s+PER\b", line, re.IGNORECASE):
+            continue
+
+        mark_matches = list(BRACING_MARK_RE.finditer(line))
+        if mark_matches:
+            for mark_m in mark_matches:
+                mark = _mark_from_match(mark_m, "bracing")
+                # Avoid capturing bare "BRACING" / "BRACE" without an id
+                if not re.search(r"\d", mark):
+                    continue
+                if mark in seen:
+                    continue
+                seen.add(mark)
+                section = _line_section(line)
+                length = _find_first(LENGTH_RE, line) or _find_first(STANDALONE_LENGTH_RE, line)
+                material = _find_first(MATERIAL_RE, line, group=0)
+                braces.append(
+                    {
+                        "Mark": mark,
+                        "Section Size": section,
+                        "Length": length,
+                        "Material": material,
+                        "Page": page_num,
+                    }
+                )
+            continue
+
+        # Framing plans often label braces only by section + "bracing" word
+        if re.search(r"\b(?:BRACING|BRACE|DIAGONAL)\b", line, re.IGNORECASE):
+            section = _line_section(line)
+            if not section:
+                continue
+            length = _find_first(LENGTH_RE, line) or _find_first(STANDALONE_LENGTH_RE, line)
+            mark = f"BR-{section}-{len(seen) + 1}"
+            if mark in seen:
+                continue
+            seen.add(mark)
+            braces.append(
+                {
+                    "Mark": mark,
+                    "Section Size": section,
+                    "Length": length,
+                    "Material": _find_first(MATERIAL_RE, line, group=0),
+                    "Page": page_num,
+                }
+            )
+    return braces
+
+
+def extract_plan_beams_from_sections(text: str, page_num: int) -> list[dict[str, Any]]:
+    """
+    On framing PLAN sheets, beams are often labeled only as W24x76 (no B1 mark).
+    Count each section occurrence on its line as a beam instance.
+    """
+    beams: list[dict[str, Any]] = []
+    # Skip lines that are clearly bracing / columns / base plates
+    for idx, line in enumerate(_iter_context_lines(text), start=1):
+        if BRACING_MARK_RE.search(line) or re.search(
+            r"\b(?:BRACING|BRACE|COLUMN|BASE\s*PLATE)\b", line, re.IGNORECASE
+        ):
+            continue
+        if COLUMN_MARK_RE.search(line) and not BEAM_MARK_RE.search(line):
+            continue
+        # Already captured via piece-mark extractor
+        if BEAM_MARK_RE.search(line):
+            continue
+
+        for sec_m in SECTION_SIZE_RE.finditer(line):
+            section = _normalize_section(sec_m.group(0))
+            # Prefer W / UB / ISMB style as beams; skip pure HSS on plan unless no brace word
+            if section.startswith("HSS") and re.search(r"\b(?:BRACE|BRACING)\b", line, re.IGNORECASE):
+                continue
+            length = _find_first(LENGTH_RE, line) or _find_first(STANDALONE_LENGTH_RE, line)
+            material = _find_first(MATERIAL_RE, line, group=0)
+            elevs = _find_all_elevations(line)
+            mark = f"BM-{section}-P{page_num}-{idx}"
+            beams.append(
+                {
+                    "Mark": mark,
+                    "Section Size": section,
+                    "Length": length,
+                    "Material": material,
+                    "Start EL": elevs[0] if elevs else "",
+                    "End EL": elevs[1] if len(elevs) > 1 else (elevs[0] if elevs else ""),
+                    "Page": page_num,
+                }
+            )
+    return beams
 
 
 # ===========================================================================
@@ -684,11 +870,73 @@ def _parse_length_to_meters(value: str) -> float | None:
     return num
 
 
+def build_view_metrics(
+    page_types: list[dict[str, Any]],
+    beams: list[dict[str, Any]],
+    bracing: list[dict[str, Any]],
+    columns: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    Build Plan vs Elevation metrics the UI shows first.
+
+    Plan pages  -> beam count/length + bracing count/length
+    Elevation   -> column count/length (height)
+    """
+    plan_pages = [p["page"] for p in page_types if p.get("type") == "Plan"]
+    elev_pages = [p["page"] for p in page_types if p.get("type") == "Elevation"]
+
+    plan_beams = [b for b in beams if b.get("Page") in plan_pages] if plan_pages else list(beams)
+    # If we found plan pages, prefer plan-only beams; else keep all beams for totals
+    if plan_pages:
+        beams_for_plan = plan_beams
+    else:
+        beams_for_plan = beams
+
+    if plan_pages:
+        bracing_for_plan = [b for b in bracing if b.get("Page") in plan_pages]
+    else:
+        bracing_for_plan = bracing
+
+    if elev_pages:
+        columns_for_elev = [c for c in columns if c.get("Page") in elev_pages]
+    else:
+        columns_for_elev = columns
+
+    beam_stats = _total_length_stats(beams_for_plan, "Length")
+    brace_stats = _total_length_stats(bracing_for_plan, "Length")
+    # Columns use Height as length
+    col_stats = _total_length_stats(
+        [{**c, "Length": c.get("Height", "")} for c in columns_for_elev],
+        "Length",
+    )
+
+    return {
+        "plan_pages": plan_pages,
+        "elevation_pages": elev_pages,
+        "plan": {
+            "beam_count": beam_stats["count"],
+            "beam_length_m": beam_stats["total_length_m"],
+            "beam_length_ft_in": beam_stats["total_length_ft_in"],
+            "bracing_count": brace_stats["count"],
+            "bracing_length_m": brace_stats["total_length_m"],
+            "bracing_length_ft_in": brace_stats["total_length_ft_in"],
+        },
+        "elevation": {
+            "column_count": col_stats["count"],
+            "column_length_m": col_stats["total_length_m"],
+            "column_length_ft_in": col_stats["total_length_ft_in"],
+        },
+    }
+
+
 def build_summary(
     beams: list[dict[str, Any]],
     columns: list[dict[str, Any]],
     plates: list[dict[str, Any]],
+    bracing: list[dict[str, Any]] | None = None,
+    view_metrics: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    bracing = bracing or []
     all_elevs: list[float] = []
     for row in beams:
         for key in ("Start EL", "End EL"):
@@ -705,35 +953,84 @@ def build_summary(
         if v is not None:
             all_elevs.append(v)
 
-    total_beam_length = 0.0
-    for row in beams:
-        length_m = _parse_length_to_meters(str(row.get("Length", "")))
-        if length_m is not None:
-            total_beam_length += length_m
+    beam_stats = _total_length_stats(beams, "Length")
+    brace_stats = _total_length_stats(bracing, "Length")
+    col_stats = _total_length_stats(
+        [{**c, "Length": c.get("Height", "")} for c in columns],
+        "Length",
+    )
 
     materials: dict[str, int] = {}
-    for row in beams + columns:
+    for row in beams + columns + bracing:
         mat = str(row.get("Material", "")).strip()
         if mat:
             materials[mat] = materials.get(mat, 0) + 1
 
-    summary: list[dict[str, Any]] = [
-        {"Metric": "Total Beams", "Value": len(beams)},
-        {"Metric": "Total Columns", "Value": len(columns)},
-        {"Metric": "Total Base Plates", "Value": len(plates)},
-        {
-            "Metric": "Min Elevation",
-            "Value": min(all_elevs) if all_elevs else "N/A",
-        },
-        {
-            "Metric": "Max Elevation",
-            "Value": max(all_elevs) if all_elevs else "N/A",
-        },
-        {
-            "Metric": "Total Beam Length (m)",
-            "Value": round(total_beam_length, 3) if total_beam_length else "N/A",
-        },
-    ]
+    summary: list[dict[str, Any]] = []
+
+    if view_metrics:
+        plan = view_metrics.get("plan") or {}
+        elev = view_metrics.get("elevation") or {}
+        summary.extend(
+            [
+                {"Metric": "— PLAN PAGE —", "Value": ""},
+                {
+                    "Metric": "Plan Pages",
+                    "Value": ", ".join(str(p) for p in view_metrics.get("plan_pages") or []) or "N/A",
+                },
+                {"Metric": "Plan Beam Count", "Value": plan.get("beam_count", 0)},
+                {
+                    "Metric": "Plan Beam Length",
+                    "Value": f"{plan.get('beam_length_ft_in', 'N/A')} ({plan.get('beam_length_m', 0)} m)",
+                },
+                {"Metric": "Plan Bracing Count", "Value": plan.get("bracing_count", 0)},
+                {
+                    "Metric": "Plan Bracing Length",
+                    "Value": f"{plan.get('bracing_length_ft_in', 'N/A')} ({plan.get('bracing_length_m', 0)} m)",
+                },
+                {"Metric": "— ELEVATION PAGE —", "Value": ""},
+                {
+                    "Metric": "Elevation Pages",
+                    "Value": ", ".join(str(p) for p in view_metrics.get("elevation_pages") or [])
+                    or "N/A",
+                },
+                {"Metric": "Elevation Column Count", "Value": elev.get("column_count", 0)},
+                {
+                    "Metric": "Elevation Column Length",
+                    "Value": f"{elev.get('column_length_ft_in', 'N/A')} ({elev.get('column_length_m', 0)} m)",
+                },
+            ]
+        )
+
+    summary.extend(
+        [
+            {"Metric": "— OVERALL —", "Value": ""},
+            {"Metric": "Total Beams", "Value": len(beams)},
+            {"Metric": "Total Bracing", "Value": len(bracing)},
+            {"Metric": "Total Columns", "Value": len(columns)},
+            {"Metric": "Total Base Plates", "Value": len(plates)},
+            {
+                "Metric": "Min Elevation",
+                "Value": min(all_elevs) if all_elevs else "N/A",
+            },
+            {
+                "Metric": "Max Elevation",
+                "Value": max(all_elevs) if all_elevs else "N/A",
+            },
+            {
+                "Metric": "Total Beam Length (m)",
+                "Value": beam_stats["total_length_m"] if beam_stats["total_length_m"] else "N/A",
+            },
+            {
+                "Metric": "Total Bracing Length (m)",
+                "Value": brace_stats["total_length_m"] if brace_stats["total_length_m"] else "N/A",
+            },
+            {
+                "Metric": "Total Column Length (m)",
+                "Value": col_stats["total_length_m"] if col_stats["total_length_m"] else "N/A",
+            },
+        ]
+    )
     if materials:
         summary.append({"Metric": "— Material Summary —", "Value": ""})
         for mat, count in sorted(materials.items()):
@@ -747,7 +1044,10 @@ def build_excel_bytes(
     beams: list[dict[str, Any]],
     columns: list[dict[str, Any]],
     plates: list[dict[str, Any]],
+    bracing: list[dict[str, Any]] | None = None,
+    view_metrics: dict[str, Any] | None = None,
 ) -> bytes:
+    bracing = bracing or []
     beam_cols = ["Mark", "Section Size", "Length", "Material", "Start EL", "End EL", "Page"]
     col_cols = [
         "Mark",
@@ -767,19 +1067,26 @@ def build_excel_bytes(
         "Top of Concrete EL",
         "Page",
     ]
+    brace_cols = ["Mark", "Section Size", "Length", "Material", "Page"]
 
     df_beams = pd.DataFrame(beams, columns=beam_cols) if beams else pd.DataFrame(columns=beam_cols)
     df_cols = pd.DataFrame(columns, columns=col_cols) if columns else pd.DataFrame(columns=col_cols)
     df_plates = (
         pd.DataFrame(plates, columns=plate_cols) if plates else pd.DataFrame(columns=plate_cols)
     )
-    df_summary = pd.DataFrame(build_summary(beams, columns, plates))
+    df_bracing = (
+        pd.DataFrame(bracing, columns=brace_cols) if bracing else pd.DataFrame(columns=brace_cols)
+    )
+    df_summary = pd.DataFrame(
+        build_summary(beams, columns, plates, bracing=bracing, view_metrics=view_metrics)
+    )
 
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         df_beams.to_excel(writer, sheet_name="Beams", index=False)
         df_cols.to_excel(writer, sheet_name="Columns", index=False)
         df_plates.to_excel(writer, sheet_name="BasePlates", index=False)
+        df_bracing.to_excel(writer, sheet_name="Bracing", index=False)
         df_summary.to_excel(writer, sheet_name="Summary", index=False)
     buffer.seek(0)
     return buffer.read()
@@ -793,7 +1100,9 @@ def process_pdf(pdf_path: str) -> tuple[bytes, dict[str, Any]]:
     all_beams: list[dict[str, Any]] = []
     all_columns: list[dict[str, Any]] = []
     all_plates: list[dict[str, Any]] = []
+    all_bracing: list[dict[str, Any]] = []
     page_sources: list[str] = []
+    page_types: list[dict[str, Any]] = []
 
     with pdfplumber.open(pdf_path) as pdf:
         total_pages = len(pdf.pages)
@@ -813,31 +1122,73 @@ def process_pdf(pdf_path: str) -> tuple[bytes, dict[str, Any]]:
             if table_text:
                 combined = f"{text}\n\n--- TABLES ---\n{table_text}"
 
-            # Step 2a: Regex extraction
-            all_beams.extend(extract_beams_regex(combined, page_num))
-            all_columns.extend(extract_columns_regex(combined, page_num))
-            all_plates.extend(extract_baseplates_regex(combined, page_num))
+            page_type = detect_page_type(combined)
+            page_types.append({"page": page_num, "type": page_type, "source": source})
+            print(f"[Process] Page {page_num} classified as {page_type}")
+
+            # Step 2a: Regex extraction routed by page type
+            if page_type == "Plan":
+                all_beams.extend(extract_beams_regex(combined, page_num))
+                all_beams.extend(extract_plan_beams_from_sections(combined, page_num))
+                all_bracing.extend(extract_bracing_regex(combined, page_num))
+                all_plates.extend(extract_baseplates_regex(combined, page_num))
+            elif page_type == "Elevation":
+                all_columns.extend(extract_columns_regex(combined, page_num))
+                # Elevations can also show braces; capture if labeled
+                all_bracing.extend(extract_bracing_regex(combined, page_num))
+            else:
+                all_beams.extend(extract_beams_regex(combined, page_num))
+                all_columns.extend(extract_columns_regex(combined, page_num))
+                all_plates.extend(extract_baseplates_regex(combined, page_num))
+                all_bracing.extend(extract_bracing_regex(combined, page_num))
 
             # Step 2b: AI extraction (if API key present)
             ai_data = ai_extract_from_text(combined, page_num)
-            all_beams.extend(ai_data["beams"])
-            all_columns.extend(ai_data["columns"])
-            all_plates.extend(ai_data["base_plates"])
+            if page_type != "Elevation":
+                all_beams.extend(ai_data["beams"])
+                all_plates.extend(ai_data["base_plates"])
+            if page_type != "Plan":
+                all_columns.extend(ai_data["columns"])
+            # Bracing from AI if model returns them under beams with BR marks
+            for b in ai_data.get("beams") or []:
+                mark = str(b.get("Mark", "")).upper()
+                if mark.startswith("BR") or mark.startswith("XB"):
+                    all_bracing.append(
+                        {
+                            "Mark": mark,
+                            "Section Size": b.get("Section Size", ""),
+                            "Length": b.get("Length", ""),
+                            "Material": b.get("Material", ""),
+                            "Page": page_num,
+                        }
+                    )
 
             # Free page resources ASAP for large PDFs
             page.close()
 
-    beams = _merge_by_mark(all_beams)
+    # Plan section-labeled beams use unique marks; piece-mark beams still merge
+    marked_beams = [b for b in all_beams if not str(b.get("Mark", "")).startswith("BM-")]
+    section_beams = [b for b in all_beams if str(b.get("Mark", "")).startswith("BM-")]
+    beams = _merge_by_mark(marked_beams) + section_beams
     columns = _merge_by_mark(all_columns)
     plates = _merge_by_mark(all_plates)
+    bracing = _merge_by_mark(all_bracing)
 
-    excel_bytes = build_excel_bytes(beams, columns, plates)
+    view_metrics = build_view_metrics(page_types, beams, bracing, columns)
+    excel_bytes = build_excel_bytes(
+        beams, columns, plates, bracing=bracing, view_metrics=view_metrics
+    )
     meta = {
         "pages": total_pages,
         "beams": beams,
         "columns": columns,
         "base_plates": plates,
-        "summary": build_summary(beams, columns, plates),
+        "bracing": bracing,
+        "page_types": page_types,
+        "view_metrics": view_metrics,
+        "summary": build_summary(
+            beams, columns, plates, bracing=bracing, view_metrics=view_metrics
+        ),
         "page_sources": page_sources,
         "pdf_type": (
             "scanned"
@@ -983,9 +1334,12 @@ async def extract_preview(file: UploadFile = File(...)):
             "filename": download_name,
             "pages": meta["pages"],
             "pdf_type": meta["pdf_type"],
+            "page_types": meta.get("page_types", []),
+            "view_metrics": meta.get("view_metrics", {}),
             "beams": meta["beams"],
             "columns": meta["columns"],
             "base_plates": meta["base_plates"],
+            "bracing": meta.get("bracing", []),
             "summary": meta["summary"],
             "excel_base64": base64.b64encode(excel_bytes).decode("ascii"),
         }
