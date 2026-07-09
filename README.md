@@ -69,6 +69,13 @@ brew install tesseract ghostscript
 ### 1. Environment variables
 
 ```bash
+# Windows (Command Prompt)
+copy .env.example .env
+
+# Windows (PowerShell)
+Copy-Item .env.example .env
+
+# macOS / Linux
 cp .env.example .env
 ```
 
@@ -97,8 +104,13 @@ association and the Summary narrative.
 ```bash
 cd backend
 python -m venv .venv
-# Windows: .venv\Scripts\activate
+
+# Windows (Command Prompt / PowerShell):
+.venv\Scripts\activate
+
+# macOS / Linux:
 source .venv/bin/activate
+
 pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
