@@ -212,6 +212,25 @@ function togglePage(list, page) {
   return [...list, page].sort((a, b) => a - b);
 }
 
+function parseManualPages(text) {
+  const pages = new Set();
+  for (const part of String(text || "").split(/[,\s]+/)) {
+    const t = part.trim();
+    if (!t) continue;
+    if (t.includes("-")) {
+      const [a, b] = t.split("-", 2).map((n) => parseInt(n, 10));
+      if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+      const start = Math.min(a, b);
+      const end = Math.max(a, b);
+      for (let n = start; n <= end; n += 1) pages.add(n);
+    } else {
+      const n = parseInt(t, 10);
+      if (Number.isFinite(n) && n > 0) pages.add(n);
+    }
+  }
+  return [...pages].sort((a, b) => a - b);
+}
+
 function PageSelectScreen({
   file,
   inspect,
@@ -223,9 +242,16 @@ function PageSelectScreen({
   onExtract,
   error,
   inspecting,
+  manualMode,
+  setManualMode,
+  planText,
+  setPlanText,
+  elevText,
+  setElevText,
 }) {
   const pageList = inspect?.page_list || [];
   const total = inspect?.pages || 0;
+  const showButtons = !inspecting && pageList.length > 0 && !manualMode;
 
   return (
     <section className="mx-auto w-full max-w-3xl px-5 pb-20 pt-10">
@@ -241,10 +267,22 @@ function PageSelectScreen({
       </p>
 
       {inspecting && (
-        <p className="mt-6 text-sm text-steel-500">Reading page list…</p>
+        <div className="mt-6 border border-steel-200 bg-white/70 px-4 py-4">
+          <p className="text-sm font-semibold text-steel-800">Reading page list…</p>
+          <p className="mt-1 text-sm text-steel-500">
+            If this takes more than a few seconds, use manual page numbers below.
+          </p>
+          <button
+            type="button"
+            className="mt-3 text-sm font-semibold text-ember-600 underline-offset-2 hover:underline"
+            onClick={() => setManualMode(true)}
+          >
+            Enter page numbers manually
+          </button>
+        </div>
       )}
 
-      {!inspecting && (
+      {(showButtons || manualMode || (!inspecting && pageList.length === 0)) && (
         <>
           <div className="mt-8 border border-ember-500/40 bg-white/80 px-5 py-5">
             <p className="font-display text-xl font-semibold uppercase tracking-wide text-steel-900">
@@ -253,29 +291,49 @@ function PageSelectScreen({
             <p className="mt-1 text-sm text-steel-500">
               Which page(s) have the framing plan for beam and bracing details?
             </p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {pageList.map((p) => {
-                const selected = planPages.includes(p.page);
-                const suggested = p.suggested_type === "Plan";
-                return (
-                  <button
-                    key={`plan-${p.page}`}
-                    type="button"
-                    onClick={() => setPlanPages(togglePage(planPages, p.page))}
-                    className={`min-w-[3.25rem] border px-3 py-2 font-display text-lg font-semibold transition ${
-                      selected
-                        ? "border-ember-500 bg-ember-500 text-white"
-                        : suggested
-                          ? "border-ember-400/50 bg-ember-500/10 text-steel-900"
-                          : "border-steel-300 bg-white text-steel-700 hover:border-steel-500"
-                    }`}
-                    title={p.title}
-                  >
-                    {p.page}
-                  </button>
-                );
-              })}
-            </div>
+
+            {showButtons ? (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {pageList.map((p) => {
+                  const selected = planPages.includes(p.page);
+                  const suggested = p.suggested_type === "Plan";
+                  return (
+                    <button
+                      key={`plan-${p.page}`}
+                      type="button"
+                      onClick={() => setPlanPages(togglePage(planPages, p.page))}
+                      className={`min-w-[3.25rem] border px-3 py-2 font-display text-lg font-semibold transition ${
+                        selected
+                          ? "border-ember-500 bg-ember-500 text-white"
+                          : suggested
+                            ? "border-ember-400/50 bg-ember-500/10 text-steel-900"
+                            : "border-steel-300 bg-white text-steel-700 hover:border-steel-500"
+                      }`}
+                      title={p.title}
+                    >
+                      {p.page}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <label className="mt-4 block">
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-steel-400">
+                  Page numbers (e.g. 1 or 1,3 or 2-4)
+                </span>
+                <input
+                  type="text"
+                  value={planText}
+                  onChange={(e) => {
+                    setPlanText(e.target.value);
+                    setPlanPages(parseManualPages(e.target.value));
+                  }}
+                  placeholder="e.g. 1"
+                  className="mt-2 w-full border border-steel-300 bg-white px-3 py-2.5 text-steel-900 outline-none focus:border-ember-500"
+                />
+              </label>
+            )}
+
             {planPages.length > 0 && (
               <p className="mt-3 text-sm font-semibold text-steel-700">
                 Selected: {planPages.join(", ")}
@@ -290,29 +348,49 @@ function PageSelectScreen({
             <p className="mt-1 text-sm text-steel-500">
               Which page(s) have the elevation for column details?
             </p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {pageList.map((p) => {
-                const selected = elevPages.includes(p.page);
-                const suggested = p.suggested_type === "Elevation";
-                return (
-                  <button
-                    key={`elev-${p.page}`}
-                    type="button"
-                    onClick={() => setElevPages(togglePage(elevPages, p.page))}
-                    className={`min-w-[3.25rem] border px-3 py-2 font-display text-lg font-semibold transition ${
-                      selected
-                        ? "border-steel-800 bg-steel-800 text-white"
-                        : suggested
-                          ? "border-steel-400 bg-steel-100 text-steel-900"
-                          : "border-steel-300 bg-white text-steel-700 hover:border-steel-500"
-                    }`}
-                    title={p.title}
-                  >
-                    {p.page}
-                  </button>
-                );
-              })}
-            </div>
+
+            {showButtons ? (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {pageList.map((p) => {
+                  const selected = elevPages.includes(p.page);
+                  const suggested = p.suggested_type === "Elevation";
+                  return (
+                    <button
+                      key={`elev-${p.page}`}
+                      type="button"
+                      onClick={() => setElevPages(togglePage(elevPages, p.page))}
+                      className={`min-w-[3.25rem] border px-3 py-2 font-display text-lg font-semibold transition ${
+                        selected
+                          ? "border-steel-800 bg-steel-800 text-white"
+                          : suggested
+                            ? "border-steel-400 bg-steel-100 text-steel-900"
+                            : "border-steel-300 bg-white text-steel-700 hover:border-steel-500"
+                      }`}
+                      title={p.title}
+                    >
+                      {p.page}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <label className="mt-4 block">
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-steel-400">
+                  Page numbers (e.g. 2 or 5,7)
+                </span>
+                <input
+                  type="text"
+                  value={elevText}
+                  onChange={(e) => {
+                    setElevText(e.target.value);
+                    setElevPages(parseManualPages(e.target.value));
+                  }}
+                  placeholder="e.g. 2"
+                  className="mt-2 w-full border border-steel-300 bg-white px-3 py-2.5 text-steel-900 outline-none focus:border-steel-700"
+                />
+              </label>
+            )}
+
             {elevPages.length > 0 && (
               <p className="mt-3 text-sm font-semibold text-steel-700">
                 Selected: {elevPages.join(", ")}
@@ -320,7 +398,7 @@ function PageSelectScreen({
             )}
           </div>
 
-          {pageList.some((p) => p.title) && (
+          {showButtons && pageList.some((p) => p.title && p.title !== `Page ${p.page}`) && (
             <div className="mt-6 border border-steel-200 bg-white/60 px-4 py-3">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-steel-400">
                 Page titles (from PDF text)
@@ -336,6 +414,25 @@ function PageSelectScreen({
                 ))}
               </ul>
             </div>
+          )}
+
+          {!manualMode && pageList.length > 0 && (
+            <button
+              type="button"
+              className="mt-4 text-sm font-semibold text-steel-500 underline-offset-2 hover:text-ember-600 hover:underline"
+              onClick={() => setManualMode(true)}
+            >
+              Prefer typing page numbers instead?
+            </button>
+          )}
+          {manualMode && pageList.length > 0 && (
+            <button
+              type="button"
+              className="mt-4 text-sm font-semibold text-steel-500 underline-offset-2 hover:text-ember-600 hover:underline"
+              onClick={() => setManualMode(false)}
+            >
+              Back to page buttons
+            </button>
           )}
         </>
       )}
@@ -359,7 +456,7 @@ function PageSelectScreen({
         </button>
         <button
           type="button"
-          disabled={inspecting || (planPages.length === 0 && elevPages.length === 0)}
+          disabled={planPages.length === 0 && elevPages.length === 0}
           onClick={onExtract}
           className="bg-steel-900 px-8 py-3 font-display text-lg font-semibold uppercase tracking-[0.14em] text-white transition hover:bg-steel-800 disabled:cursor-not-allowed disabled:bg-steel-300"
         >
@@ -654,6 +751,9 @@ export default function App() {
   const [planPages, setPlanPages] = useState([]);
   const [elevPages, setElevPages] = useState([]);
   const [inspecting, setInspecting] = useState(false);
+  const [manualMode, setManualMode] = useState(false);
+  const [planText, setPlanText] = useState("");
+  const [elevText, setElevText] = useState("");
   const progressTimer = useRef(null);
 
   useEffect(() => {
@@ -686,10 +786,13 @@ export default function App() {
     if (!file) return;
     setError("");
     setInspecting(true);
+    setManualMode(false);
     setStep(STEPS.SELECT);
     setInspect(null);
     setPlanPages([]);
     setElevPages([]);
+    setPlanText("");
+    setElevText("");
 
     const form = new FormData();
     form.append("file", file);
@@ -697,20 +800,43 @@ export default function App() {
     try {
       const response = await axios.post(`${API_BASE}/api/inspect`, form, {
         headers: { "Content-Type": "multipart/form-data" },
-        timeout: 5 * 60 * 1000,
+        // Keep short — large PDFs must not freeze the picker
+        timeout: 45 * 1000,
       });
       const data = response.data;
       setInspect(data);
       // Pre-select suggested pages; user can change them
-      setPlanPages(data.suggested_plan_pages || []);
-      setElevPages(data.suggested_elevation_pages || []);
+      const suggestedPlan = data.suggested_plan_pages || [];
+      const suggestedElev = data.suggested_elevation_pages || [];
+      setPlanPages(suggestedPlan);
+      setElevPages(suggestedElev);
+      setPlanText(suggestedPlan.join(", "));
+      setElevText(suggestedElev.join(", "));
+      setError("");
     } catch (err) {
+      // Don't kick the user back — let them type page numbers manually
       const detail =
-        err.response?.data?.detail ||
-        err.message ||
-        "Could not read PDF pages.";
+        err.code === "ECONNABORTED"
+          ? "Page list timed out. Enter Plan / Elevation page numbers manually below. Also confirm the backend is running on port 8000."
+          : err.response?.data?.detail ||
+            err.message ||
+            "Could not read PDF pages. Enter page numbers manually below.";
       setError(typeof detail === "string" ? detail : JSON.stringify(detail));
-      setStep(STEPS.UPLOAD);
+      setManualMode(true);
+      // Fallback page buttons 1..20 so user can still click if they know the sheet
+      const fallbackPages = Array.from({ length: 20 }, (_, i) => ({
+        page: i + 1,
+        suggested_type: "Other",
+        title: `Page ${i + 1}`,
+        source: "fallback",
+      }));
+      setInspect({
+        pages: 20,
+        page_list: fallbackPages,
+        suggested_plan_pages: [],
+        suggested_elevation_pages: [],
+        fallback: true,
+      });
     } finally {
       setInspecting(false);
     }
@@ -768,6 +894,9 @@ export default function App() {
     setInspect(null);
     setPlanPages([]);
     setElevPages([]);
+    setPlanText("");
+    setElevText("");
+    setManualMode(false);
     setError("");
     setProgress(0);
   };
@@ -800,6 +929,12 @@ export default function App() {
             onExtract={handleExtract}
             error={error}
             inspecting={inspecting}
+            manualMode={manualMode}
+            setManualMode={setManualMode}
+            planText={planText}
+            setPlanText={setPlanText}
+            elevText={elevText}
+            setElevText={setElevText}
           />
         )}
         {step === STEPS.LOADING && (

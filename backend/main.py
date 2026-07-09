@@ -1138,38 +1138,90 @@ def _parse_page_list(raw: str | None, total_pages: int) -> list[int] | None:
     return sorted(pages)
 
 
+def _fast_page_count(pdf_path: str) -> int:
+    """Get page count quickly without rendering pages."""
+    # pypdfium2 is usually fastest / most reliable for page count
+    try:
+        import pypdfium2 as pdfium
+
+        doc = pdfium.PdfDocument(pdf_path)
+        try:
+            return len(doc)
+        finally:
+            doc.close()
+    except Exception as exc:
+        print(f"[Inspect] pypdfium2 page count failed: {exc}")
+
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            return len(pdf.pages)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not open PDF: {exc}") from exc
+
+
+def _peek_page_title(pdf_path: str, page_index: int) -> tuple[str, str]:
+    """
+    Best-effort title + suggested type for one page.
+    Never OCR — must stay fast for the picker UI.
+    """
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            if page_index < 0 or page_index >= len(pdf.pages):
+                return f"Page {page_index + 1}", "Other"
+            page = pdf.pages[page_index]
+            # Only read a small crop of the top of the page (title block area)
+            try:
+                width = float(page.width or 0)
+                height = float(page.height or 0)
+                if width > 0 and height > 0:
+                    top_band = page.crop((0, 0, width, min(height * 0.22, 180)))
+                    digital = top_band.extract_text() or ""
+                else:
+                    digital = page.extract_text() or ""
+            except Exception:
+                digital = page.extract_text() or ""
+            page.close()
+    except Exception:
+        return f"Page {page_index + 1}", "Other"
+
+    digital = (digital or "").strip()
+    if not digital:
+        return f"Page {page_index + 1}", "Other"
+    lines = [ln.strip() for ln in digital.splitlines() if ln.strip()]
+    title = " ".join(lines[:2])[:120] if lines else f"Page {page_index + 1}"
+    suggested = detect_page_type(digital)
+    return title, suggested
+
+
 def inspect_pdf_pages(pdf_path: str) -> dict[str, Any]:
     """
     Fast page inventory for the UI picker.
-    Uses digital text when available; does not OCR every page.
-    """
-    pages_info: list[dict[str, Any]] = []
-    with pdfplumber.open(pdf_path) as pdf:
-        total_pages = len(pdf.pages)
-        if total_pages == 0:
-            raise HTTPException(status_code=400, detail="PDF has no pages.")
 
-        for index, page in enumerate(pdf.pages):
-            page_num = index + 1
-            digital = ""
-            try:
-                digital = page.extract_text() or ""
-            except Exception:
-                digital = ""
-            source = "digital" if len(digital.strip()) >= DIGITAL_TEXT_THRESHOLD else "unknown"
-            suggested = detect_page_type(digital) if digital.strip() else "Other"
-            # Title-ish snippet from the first non-empty lines
-            lines = [ln.strip() for ln in digital.splitlines() if ln.strip()]
-            title = " ".join(lines[:2])[:120] if lines else f"Page {page_num}"
-            pages_info.append(
-                {
-                    "page": page_num,
-                    "suggested_type": suggested,
-                    "title": title,
-                    "source": source,
-                }
-            )
-            page.close()
+    Always returns a page list quickly. Title sniffing is best-effort and
+    capped so large scanned drawings cannot hang the "Reading page list…" UI.
+    """
+    total_pages = _fast_page_count(pdf_path)
+    if total_pages == 0:
+        raise HTTPException(status_code=400, detail="PDF has no pages.")
+
+    # Cap title peeks — large PDFs still get all page buttons, just fewer titles
+    max_title_peeks = min(total_pages, 40)
+    pages_info: list[dict[str, Any]] = []
+
+    for page_num in range(1, total_pages + 1):
+        if page_num <= max_title_peeks:
+            title, suggested = _peek_page_title(pdf_path, page_num - 1)
+            source = "digital" if title != f"Page {page_num}" else "unknown"
+        else:
+            title, suggested, source = f"Page {page_num}", "Other", "unknown"
+        pages_info.append(
+            {
+                "page": page_num,
+                "suggested_type": suggested,
+                "title": title,
+                "source": source,
+            }
+        )
 
     suggested_plan = [p["page"] for p in pages_info if p["suggested_type"] == "Plan"]
     suggested_elev = [p["page"] for p in pages_info if p["suggested_type"] == "Elevation"]
