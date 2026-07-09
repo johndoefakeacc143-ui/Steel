@@ -14,12 +14,18 @@ already contain, so accurate horizontal counts are preserved and rotated marks
 
 from __future__ import annotations
 
+import logging
 import re
 from collections import Counter, defaultdict
 
 from src.bom_parser import DRAWING_MARK_PATTERN
 
+logger = logging.getLogger(__name__)
+
 _EPS = 12.0  # max centre distance (px) for two chars to join a cluster
+# Above this many characters, skip geometry-based recovery (it would be too slow);
+# horizontal marks are still captured from the text layer.
+_MAX_CHARS = 60000
 _MAX_LABEL_CHARS = 6  # clusters larger than this are horizontal text lines
 # Anchored mark pattern for validating a single reconstructed label.
 _MARK_FULLMATCH = re.compile(r"(?:BR\d+|BP\d+|PB[1-9][A-Z]?|PB[A-Z]|B[2-9])$", re.I)
@@ -100,6 +106,14 @@ def recover_stacked_marks(chars: list[dict], existing_text: str) -> dict[str, in
     returned, so horizontal counts stay authoritative.
     """
     if not chars:
+        return {}
+    if len(chars) > _MAX_CHARS:
+        logger.warning(
+            "Skipping rotated/stacked mark recovery: %s characters exceeds limit "
+            "(%s). Horizontal marks are still read from the text layer.",
+            len(chars),
+            _MAX_CHARS,
+        )
         return {}
     text_marks = {m.upper() for m in DRAWING_MARK_PATTERN.findall(existing_text or "")}
     clustered = _cluster_marks(chars)
