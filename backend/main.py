@@ -35,10 +35,28 @@ from pypdf import PdfReader
 # ---------------------------------------------------------------------------
 # Env / App setup
 # ---------------------------------------------------------------------------
-load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env")
-load_dotenv()  # also allow backend/.env
+_ROOT_ENV = Path(__file__).resolve().parent.parent / ".env"
+_BACKEND_ENV = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=_ROOT_ENV)
+load_dotenv(dotenv_path=_BACKEND_ENV)
+load_dotenv()  # also allow process env
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
+def _refresh_openai_key() -> str:
+    """
+    Re-read .env on each AI call so editing OPENAI_API_KEY takes effect
+    after save (uvicorn --reload also picks it up on file change).
+    """
+    load_dotenv(dotenv_path=_ROOT_ENV, override=True)
+    load_dotenv(dotenv_path=_BACKEND_ENV, override=True)
+    key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    # Treat placeholder values as empty
+    if not key or key.lower().startswith("sk-your") or key == "sk-...":
+        return ""
+    return key
+
+
+OPENAI_API_KEY = _refresh_openai_key()
 MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MB
 PAGE_ASK_THRESHOLD = 5  # >5 pages → ask user which pages to scan
 
@@ -1382,8 +1400,13 @@ def ai_extract_from_text(text: str, page_no: int) -> dict[str, list[dict]]:
     Prints the raw AI response to the console for debugging.
     """
     empty = {"beams": [], "columns": [], "base_plates": [], "bracings": []}
-    if not OPENAI_API_KEY or not text.strip():
-        reason = "OPENAI_API_KEY not set" if not OPENAI_API_KEY else "empty page text"
+    api_key = _refresh_openai_key()
+    if not api_key or not text.strip():
+        reason = (
+            "OPENAI_API_KEY not set in .env — paste your sk-... key and restart"
+            if not api_key
+            else "empty page text"
+        )
         print(f"[AI extract] SKIPPED page {page_no} — {reason}")
         return empty
     try:
@@ -1395,7 +1418,7 @@ def ai_extract_from_text(text: str, page_no: int) -> dict[str, list[dict]]:
         llm = ChatOpenAI(
             model=model_name,
             temperature=0,
-            api_key=OPENAI_API_KEY,
+            api_key=api_key,
         )
         # Cap text to keep token usage reasonable on huge sheets
         clipped = text[:12000]
@@ -1693,6 +1716,59 @@ def process_pdf(
         beams, columns, base_plates, bracings, page_sources, all_text_snippets
     )
 
+    # Structured takeoff lines for UI / Excel consumers
+    mark_quantity = {
+        "beams": [
+            {
+                "sentence": _mark_quantity_sentence("Beam", m, c, L, "length"),
+                "mark": m,
+                "length": L,
+                "quantity": c,
+            }
+            for m, L, c in _count_by_mark_and_length(beams, "Length (mm)")
+        ],
+        "columns": [
+            {
+                "sentence": _mark_quantity_sentence("Column", m, c, L, "length"),
+                "mark": m,
+                "length": L,
+                "quantity": c,
+            }
+            for m, L, c in _count_by_mark_and_length(columns, "Height (mm)")
+        ],
+        "bracings": [
+            {
+                "sentence": _mark_quantity_sentence("Bracing", m, c, L, "length"),
+                "mark": m,
+                "length": L,
+                "quantity": c,
+            }
+            for m, L, c in _count_by_mark_and_length(bracings, "Length (mm)")
+        ],
+        "base_plates": [
+            {
+                "sentence": _mark_quantity_sentence("Base plate", m, c, w, "weight"),
+                "mark": m,
+                "weight": w,
+                "quantity": c,
+            }
+            for m, w, c in _count_by_mark_and_length(base_plates, "Weight (kg)")
+        ],
+    }
+
+    # Print takeoff sentences to console (same style as Excel Summary)
+    print(f"\n{'=' * 72}")
+    print("[SUMMARY] Mark × Length × Quantity")
+    print(f"{'=' * 72}")
+    for group in ("beams", "columns", "bracings", "base_plates"):
+        items = mark_quantity.get(group) or []
+        if not items:
+            continue
+        print(f"\n{group.upper()}:")
+        for item in items:
+            print(f"  {item['sentence']}")
+    print(f"{'=' * 72}\n")
+
     return {
         "beams": beams,
         "columns": columns,
@@ -1700,6 +1776,7 @@ def process_pdf(
         "bracings": bracings,
         "summary": summary_rows,
         "engineer_notes": engineer_notes,
+        "mark_quantity": mark_quantity,
         "page_sources": page_sources,
     }
 
@@ -1753,6 +1830,68 @@ def _count_by_key(rows: list[dict], key: str) -> list[tuple[str, int]]:
     return sorted(counter.items(), key=lambda x: (-x[1], x[0]))
 
 
+def _format_length_display(length: Any) -> str:
+    """Pretty-print length for summary sentences (1500 not 1500.0)."""
+    if length in ("", None, "UNKNOWN"):
+        return ""
+    try:
+        f = float(length)
+        return str(int(f)) if f == int(f) else str(f)
+    except (TypeError, ValueError):
+        return str(length)
+
+
+def _count_by_mark_and_length(
+    rows: list[dict],
+    length_key: str = "Length (mm)",
+) -> list[tuple[str, str, int]]:
+    """
+    Group members by Mark + Length → quantity.
+    Returns list of (mark, length_display, quantity) sorted by mark then length.
+    Example: B3@1500×4, B3@2000×8, B3@6000×2, B7@2000×76
+    """
+    counter: Counter = Counter()
+    for r in rows:
+        mark = str(r.get("Mark") or "UNKNOWN")
+        length = r.get(length_key)
+        if length in ("", None):
+            length_key_str = "UNKNOWN"
+        else:
+            length_key_str = _format_length_display(length) or "UNKNOWN"
+        counter[(mark, length_key_str)] += 1
+
+    def _sort_key(item: tuple[tuple[str, str], int]) -> tuple:
+        (mark, length), _cnt = item
+        try:
+            length_num = float(length) if length != "UNKNOWN" else -1
+        except ValueError:
+            length_num = -1
+        return (mark, length_num)
+
+    return [
+        (mark, length, cnt)
+        for (mark, length), cnt in sorted(counter.items(), key=_sort_key)
+    ]
+
+
+def _mark_quantity_sentence(
+    kind: str,
+    mark: str,
+    quantity: int,
+    length: str = "",
+    unit: str = "length",
+) -> str:
+    """
+    Human summary line matching takeoff style:
+      Beam B3 are 4 of length 1500
+      Beam B7 are 76 of length 2000
+      Base plate BP1 are 11
+    """
+    if length and length != "UNKNOWN":
+        return f"{kind} {mark} are {quantity} of {unit} {length}"
+    return f"{kind} {mark} are {quantity}"
+
+
 def _numeric_series(rows: list[dict], key: str) -> list[float]:
     vals = []
     for r in rows:
@@ -1777,7 +1916,10 @@ def build_summary(
     """
     Sheet4 Summary content:
     - Totals, min/max elevation, total beam length, material summary
-    - Engineer-style counts: N columns of length L, N bracings of length L, etc.
+    - Mark × length × quantity sentences, e.g.:
+        Beam B3 are 4 of length 1500
+        Beam B3 are 8 of length 2000
+        Beam B7 are 76 of length 2000
     """
     rows: list[dict[str, Any]] = []
 
@@ -1807,6 +1949,25 @@ def build_summary(
     add("Elevations", "Min Elevation", min(elevs) if elevs else "")
     add("Elevations", "Max Elevation", max(elevs) if elevs else "")
 
+    # --- Mark × Length × Quantity (primary takeoff view) ---
+    beam_mq = _count_by_mark_and_length(beams, "Length (mm)")
+    col_mq = _count_by_mark_and_length(columns, "Height (mm)")
+    brace_mq = _count_by_mark_and_length(bracings, "Length (mm)")
+    bp_mq = _count_by_mark_and_length(base_plates, "Weight (kg)")
+
+    for mark, length, cnt in beam_mq:
+        sentence = _mark_quantity_sentence("Beam", mark, cnt, length, "length")
+        add("Beam Mark Qty", sentence, cnt)
+    for mark, length, cnt in col_mq:
+        sentence = _mark_quantity_sentence("Column", mark, cnt, length, "length")
+        add("Column Mark Qty", sentence, cnt)
+    for mark, length, cnt in brace_mq:
+        sentence = _mark_quantity_sentence("Bracing", mark, cnt, length, "length")
+        add("Bracing Mark Qty", sentence, cnt)
+    for mark, weight, cnt in bp_mq:
+        sentence = _mark_quantity_sentence("Base plate", mark, cnt, weight, "weight")
+        add("Base Plate Mark Qty", sentence, cnt)
+
     # Size counts
     for size, cnt in _count_by_key(beams, "Section Size"):
         add("Beam Sizes", f"{cnt} beam(s) of size {size}", cnt)
@@ -1814,16 +1975,6 @@ def build_summary(
         add("Column Sizes", f"{cnt} column(s) of size {size}", cnt)
     for size, cnt in _count_by_key(base_plates, "Plate Size"):
         add("Base Plate Sizes", f"{cnt} base plate(s) of size {size}", cnt)
-
-    # Length / weight groupings (engineer narrative inputs)
-    for length, cnt in _count_by_key(columns, "Height (mm)"):
-        add("Column Lengths", f"{cnt} column(s) of length {length} mm", cnt)
-    for length, cnt in _count_by_key(bracings, "Length (mm)"):
-        add("Bracing Lengths", f"{cnt} bracing(s) of length {length} mm", cnt)
-    for length, cnt in _count_by_key(beams, "Length (mm)"):
-        add("Beam Lengths", f"{cnt} beam(s) of length {length} mm", cnt)
-    for wt, cnt in _count_by_key(base_plates, "Weight (kg)"):
-        add("Base Plate Weights", f"{cnt} base plate(s) of weight {wt} kg", cnt)
 
     # Material summary
     mat_counter: Counter = Counter()
@@ -1838,7 +1989,7 @@ def build_summary(
     for src, cnt in src_counter.items():
         add("PDF Analysis", f"Pages processed as {src}", cnt)
 
-    # Engineer narrative
+    # Engineer narrative — mark / length / quantity sentences
     notes_lines = [
         "SENIOR STEEL STRUCTURE ENGINEER — DRAWING SUMMARY",
         "=" * 56,
@@ -1846,34 +1997,37 @@ def build_summary(
         f"{len(bracings)} bracing(s), and {len(base_plates)} base plate(s).",
         "",
     ]
-    if columns:
-        notes_lines.append("Columns by height:")
-        for length, cnt in _count_by_key(columns, "Height (mm)"):
-            notes_lines.append(f"  • {cnt} column(s) of length {length} mm")
-        notes_lines.append("Columns by section:")
-        for size, cnt in _count_by_key(columns, "Section Size"):
-            notes_lines.append(f"  • {cnt} column(s) of size {size}")
+
+    if beam_mq:
+        notes_lines.append("BEAMS (mark × length × quantity):")
+        for mark, length, cnt in beam_mq:
+            notes_lines.append(
+                f"  • {_mark_quantity_sentence('Beam', mark, cnt, length, 'length')}"
+            )
         notes_lines.append("")
-    if bracings:
-        notes_lines.append("Bracings by length:")
-        for length, cnt in _count_by_key(bracings, "Length (mm)"):
-            notes_lines.append(f"  • {cnt} bracing(s) of length {length} mm")
+
+    if col_mq:
+        notes_lines.append("COLUMNS (mark × length × quantity):")
+        for mark, length, cnt in col_mq:
+            notes_lines.append(
+                f"  • {_mark_quantity_sentence('Column', mark, cnt, length, 'length')}"
+            )
         notes_lines.append("")
-    if beams:
-        notes_lines.append("Beams by length:")
-        for length, cnt in _count_by_key(beams, "Length (mm)"):
-            notes_lines.append(f"  • {cnt} beam(s) of length {length} mm")
-        notes_lines.append("Beams by section:")
-        for size, cnt in _count_by_key(beams, "Section Size"):
-            notes_lines.append(f"  • {cnt} beam(s) of size {size}")
+
+    if brace_mq:
+        notes_lines.append("BRACINGS (mark × length × quantity):")
+        for mark, length, cnt in brace_mq:
+            notes_lines.append(
+                f"  • {_mark_quantity_sentence('Bracing', mark, cnt, length, 'length')}"
+            )
         notes_lines.append("")
-    if base_plates:
-        notes_lines.append("Base plates by weight:")
-        for wt, cnt in _count_by_key(base_plates, "Weight (kg)"):
-            notes_lines.append(f"  • {cnt} base plate(s) of weight {wt} kg")
-        notes_lines.append("Base plates by size:")
-        for size, cnt in _count_by_key(base_plates, "Plate Size"):
-            notes_lines.append(f"  • {cnt} base plate(s) of size {size}")
+
+    if bp_mq:
+        notes_lines.append("BASE PLATES (mark × weight × quantity):")
+        for mark, weight, cnt in bp_mq:
+            notes_lines.append(
+                f"  • {_mark_quantity_sentence('Base plate', mark, cnt, weight, 'weight')}"
+            )
         notes_lines.append("")
 
     if elevs:
@@ -1898,9 +2052,10 @@ def build_summary(
         ]
     )
 
-    # Optional AI polish of the narrative
+    # Optional AI polish — keep mark/length/quantity sentences intact
     engineer_notes = "\n".join(notes_lines)
-    if OPENAI_API_KEY:
+    api_key = _refresh_openai_key()
+    if api_key:
         try:
             from langchain_openai import ChatOpenAI
             from langchain_core.messages import HumanMessage, SystemMessage
@@ -1909,7 +2064,7 @@ def build_summary(
             llm = ChatOpenAI(
                 model=model_name,
                 temperature=0.2,
-                api_key=OPENAI_API_KEY,
+                api_key=api_key,
             )
             print(f"\n{'=' * 72}")
             print(f"[AI summary] CALLING model={model_name}")
@@ -1919,8 +2074,10 @@ def build_summary(
                     SystemMessage(
                         content=(
                             "You are a senior structural steel engineer. "
-                            "Rewrite the notes into a concise professional summary "
-                            "(keep all counts and lengths). Plain text only."
+                            "Rewrite into a concise professional summary. "
+                            "KEEP every mark/length/quantity sentence exactly, e.g. "
+                            "'Beam B3 are 4 of length 1500', "
+                            "'Beam B7 are 76 of length 2000'. Plain text only."
                         )
                     ),
                     HumanMessage(content=engineer_notes[:8000]),
@@ -2068,10 +2225,18 @@ def build_excel(result: dict[str, Any]) -> bytes:
 
 @app.get("/api/health")
 def health():
+    key = _refresh_openai_key()
     return {
         "status": "ok",
         "app": "SteelDraw AI Extractor",
-        "openai_configured": bool(OPENAI_API_KEY),
+        "openai_configured": bool(key),
+        "openai_model": os.getenv("OPENAI_MODEL", "gpt-4o-mini") if key else None,
+        "env_files": {
+            "root": str(_ROOT_ENV),
+            "root_exists": _ROOT_ENV.exists(),
+            "backend": str(_BACKEND_ENV),
+            "backend_exists": _BACKEND_ENV.exists(),
+        },
     }
 
 
@@ -2237,6 +2402,7 @@ async def upload(
                 "bracings": result["bracings"],
                 "summary": result["summary"],
                 "engineer_notes": result["engineer_notes"],
+                "mark_quantity": result.get("mark_quantity") or {},
             },
             "counts": {
                 "beams": len(result["beams"]),

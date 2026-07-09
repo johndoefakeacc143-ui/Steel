@@ -363,10 +363,29 @@ function SizeCountList({ rows, sizeKey, label }) {
   );
 }
 
+function MarkQuantityList({ items, title }) {
+  if (!items?.length) return null;
+  return (
+    <div className="mt-4">
+      <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-steel-500">
+        {title}
+      </p>
+      <ul className="mt-2 space-y-1.5 border border-steel-200 bg-white/90 p-4 text-sm text-steel-800">
+        {items.map((item, idx) => (
+          <li key={`${item.mark}-${item.length || item.weight}-${idx}`}>
+            {item.sentence}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function ResultsScreen({ result, onReset }) {
   const [tab, setTab] = useState("beams");
   const preview = result.preview || {};
   const counts = result.counts || {};
+  const mq = preview.mark_quantity || {};
 
   const activeRows =
     tab === "summary"
@@ -450,12 +469,21 @@ function ResultsScreen({ result, onReset }) {
       </div>
 
       <div className="mt-4">
-        {tab === "summary" && preview.engineer_notes && (
-          <pre className="mb-4 whitespace-pre-wrap border border-steel-200 bg-white/90 p-4 font-sans text-sm leading-relaxed text-steel-800">
-            {preview.engineer_notes}
-          </pre>
+        {tab === "summary" && (
+          <>
+            <MarkQuantityList items={mq.beams} title="Beams — mark × length × quantity" />
+            <MarkQuantityList items={mq.columns} title="Columns — mark × length × quantity" />
+            <MarkQuantityList items={mq.bracings} title="Bracings — mark × length × quantity" />
+            <MarkQuantityList items={mq.base_plates} title="Base plates — mark × weight × quantity" />
+            {preview.engineer_notes && (
+              <pre className="mt-4 whitespace-pre-wrap border border-steel-200 bg-white/90 p-4 font-sans text-sm leading-relaxed text-steel-800">
+                {preview.engineer_notes}
+              </pre>
+            )}
+          </>
         )}
-        <DataTable rows={activeRows} />
+        {tab !== "summary" && <DataTable rows={activeRows} />}
+        {tab === "summary" && <div className="mt-4"><DataTable rows={activeRows} /></div>}
       </div>
     </section>
   );
