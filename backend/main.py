@@ -425,8 +425,12 @@ MULTI_LENGTH_BEAM_WEIGHTS: dict[str, dict[float, int]] = {
 }
 
 # Diagonal brace bay legs (a, b) → L = √(a²+b²). Edit per typical brace bay.
+# From the pipe-rack plan callouts (user-verified):
+#   BR1 spans 3000 (horizontal) × 1500 (vertical) → √(3000²+1500²) = 3354.10
+#   BR4 spans 100  (horizontal) × 2000 (vertical) → √(100²+2000²)  = 2002.50
 DEFAULT_PLAN_BRACE_LEGS_MM: dict[str, tuple[float, float]] = {
-    "BR1": (2000.0, 2000.0),  # common square bay on pipe-rack plans
+    "BR1": (3000.0, 1500.0),
+    "BR4": (100.0, 2000.0),
 }
 
 # Explicit base / top elevation phrases on column schedules
@@ -1410,14 +1414,19 @@ def sanitize_member_lengths(
         except (TypeError, ValueError):
             raw_f = None
 
+        # Known brace marks: ALWAYS use verified bay legs (ignore OCR mis-pairs).
+        # BR1 = √(3000²+1500²), BR4 = √(100²+2000²) — edit DEFAULT_PLAN_BRACE_LEGS_MM.
+        if mark in DEFAULT_PLAN_BRACE_LEGS_MM:
+            a, b = DEFAULT_PLAN_BRACE_LEGS_MM[mark]
+            r["Length (mm)"] = round(triangle_diagonal_length(a, b), 2)
+            r["Length Method"] = f"√({int(a)}²+{int(b)}²) known-bay"
+            clean_braces.append(r)
+            continue
+
         if is_diag and raw_f is not None and 500 <= raw_f <= 20000:
             r["Length (mm)"] = round(raw_f, 2)
         elif raw_f is not None and _is_standard_length(raw_f):
             r["Length (mm)"] = _snap_to_standard(raw_f)
-        elif mark in DEFAULT_PLAN_BRACE_LEGS_MM:
-            a, b = DEFAULT_PLAN_BRACE_LEGS_MM[mark]
-            r["Length (mm)"] = round(triangle_diagonal_length(a, b), 2)
-            r["Length Method"] = f"√({int(a)}²+{int(b)}²) default-bay"
         else:
             if raw_f is not None and 2000 <= raw_f <= 15000 and not _is_standard_length(raw_f):
                 r["Length (mm)"] = round(raw_f, 2)
@@ -1514,7 +1523,21 @@ def expand_rows_to_mark_quantities(
                 out.append(row)
             continue
 
-        # Preserve observed length distribution (bracing diagonals, etc.)
+        # Known diagonal braces → force √(a²+b²) × full quantity
+        # BR1 = √(3000²+1500²)=3354.10, BR4 = √(100²+2000²)=2002.50
+        if mark in DEFAULT_PLAN_BRACE_LEGS_MM and length_key == "Length (mm)":
+            a, b = DEFAULT_PLAN_BRACE_LEGS_MM[mark]
+            L = _format_length_display(round(triangle_diagonal_length(a, b), 2))
+            for i in range(total_qty):
+                row = dict(template)
+                row["Mark"] = mark
+                row[length_key] = L
+                row["Length Method"] = f"√({int(a)}²+{int(b)}²) known-bay"
+                row["_instance"] = f"qty-{mark}-{i}"
+                out.append(row)
+            continue
+
+        # Preserve observed length distribution (other bracing diagonals, etc.)
         length_counter: Counter = Counter()
         for r in existing:
             L = r.get(length_key)
@@ -2191,6 +2214,8 @@ IMPORTANT RULES:
    Vertical beams use the vertical dimension beside them; horizontal beams use the
    horizontal dimension. Same mark at different lengths → separate rows.
 7. DIAGONAL RULE: for diagonal bracing/beams, L = sqrt(a^2 + b^2) from bay spans.
+   Known pipe-rack braces: BR1 = sqrt(3000^2 + 1500^2) = 3354.10 mm;
+   BR4 = sqrt(100^2 + 2000^2) = 2002.50 mm.
 8. Quantity must be an integer count of occurrences (not a guess of shipping qty).
 9. Return ONLY valid JSON.
 """
