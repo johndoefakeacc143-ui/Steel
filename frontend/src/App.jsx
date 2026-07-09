@@ -6,6 +6,7 @@ const API_BASE = import.meta.env.VITE_API_URL || "";
 const TABS = [
   { id: "beams", label: "Beams", key: "beams" },
   { id: "columns", label: "Columns", key: "columns" },
+  { id: "bracings", label: "Bracing", key: "bracings" },
   { id: "base_plates", label: "Base Plates", key: "base_plates" },
   { id: "summary", label: "Summary", key: "summary" },
 ];
@@ -120,8 +121,8 @@ function UploadScreen({ onFileReady, error, setError }) {
         Read steel drawings like a detailer.
       </h1>
       <p className="mt-4 max-w-lg text-lg text-steel-600">
-        Drop a structural PDF. Extract beams, columns, and base plates into Excel —
-        marks, sizes, lengths, and elevations.
+        Drop a structural PDF. Extract beams, columns, bracing, and base plates
+        into Excel — Mark, Length/Height, Quantity.
       </p>
 
       <div
@@ -190,15 +191,18 @@ function PageSelectScreen({ meta, onSubmit, onCancel, error, setError, busy }) {
       </h1>
       <p className="mt-3 text-steel-600">
         <span className="font-semibold text-steel-800">{meta.filename}</span> has{" "}
-        <span className="font-mono">{meta.page_count}</span> pages. Choose which
-        sheets to scan for each member type.
+        <span className="font-mono">{meta.page_count}</span> pages (more than 5).
+        Tell us which sheets to scan.
       </p>
 
       <div className="mt-8 space-y-5 border border-steel-200 bg-white/80 p-6">
         <label className="block">
           <span className="font-mono text-xs uppercase tracking-[0.2em] text-steel-500">
-            Plan page(s) — beams &amp; bracings
+            Plan page(s) — beam &amp; bracing details
           </span>
+          <p className="mt-1 text-sm text-steel-500">
+            From which page of plan do you want the beam and bracing details?
+          </p>
           <input
             value={planPages}
             onChange={(e) => setPlanPages(e.target.value)}
@@ -208,8 +212,11 @@ function PageSelectScreen({ meta, onSubmit, onCancel, error, setError, busy }) {
         </label>
         <label className="block">
           <span className="font-mono text-xs uppercase tracking-[0.2em] text-steel-500">
-            Elevation page(s) — columns &amp; base plates
+            Elevation page(s) — column &amp; elevation details
           </span>
+          <p className="mt-1 text-sm text-steel-500">
+            From which page of elevation do you want column and elevation details?
+          </p>
           <input
             value={elevationPages}
             onChange={(e) => setElevationPages(e.target.value)}
@@ -269,7 +276,7 @@ function LoadingScreen({ progress, label }) {
         <div className="animate-scan-line absolute left-0 right-0 h-1 bg-gradient-to-r from-transparent via-ember-400 to-transparent" />
         <div className="absolute inset-0 flex items-center justify-center">
           <p className="animate-pulseSoft font-mono text-xs uppercase tracking-[0.3em] text-steel-100">
-            Extracting marks · sizes · elevations
+            Extracting beams · columns · bracing · base plates
           </p>
         </div>
       </div>
@@ -338,31 +345,6 @@ function DataTable({ rows }) {
   );
 }
 
-function SizeCountList({ rows, sizeKey, label }) {
-  const counts = useMemo(() => {
-    const map = new Map();
-    (rows || []).forEach((r) => {
-      const size = r[sizeKey] || "UNKNOWN";
-      map.set(size, (map.get(size) || 0) + 1);
-    });
-    return [...map.entries()].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
-  }, [rows, sizeKey]);
-
-  if (!counts.length) return null;
-  return (
-    <div className="mt-3 flex flex-wrap gap-2">
-      {counts.map(([size, n]) => (
-        <span
-          key={size}
-          className="border border-steel-200 bg-white px-2.5 py-1 font-mono text-xs text-steel-700"
-        >
-          {n} {label} · {size}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 function MarkQuantityList({ items, title }) {
   if (!items?.length) return null;
   return (
@@ -427,10 +409,10 @@ function ResultsScreen({ result, onReset }) {
 
       <div className="mt-8 grid gap-3 sm:grid-cols-4">
         {[
-          ["Beams", counts.beams ?? preview.beams?.length ?? 0],
-          ["Columns", counts.columns ?? preview.columns?.length ?? 0],
-          ["Base Plates", counts.base_plates ?? preview.base_plates?.length ?? 0],
-          ["Bracings", counts.bracings ?? preview.bracings?.length ?? 0],
+          ["Beams", counts.beams ?? 0],
+          ["Columns", counts.columns ?? 0],
+          ["Bracing", counts.bracings ?? 0],
+          ["Base Plates", counts.base_plates ?? 0],
         ].map(([label, value]) => (
           <div key={label} className="border border-steel-200 bg-white/80 px-4 py-3">
             <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-steel-500">
@@ -440,16 +422,6 @@ function ResultsScreen({ result, onReset }) {
           </div>
         ))}
       </div>
-
-      {tab === "beams" && (
-        <SizeCountList rows={preview.beams} sizeKey="Section Size" label="beams" />
-      )}
-      {tab === "columns" && (
-        <SizeCountList rows={preview.columns} sizeKey="Section Size" label="columns" />
-      )}
-      {tab === "base_plates" && (
-        <SizeCountList rows={preview.base_plates} sizeKey="Plate Size" label="plates" />
-      )}
 
       <div className="mt-8 flex flex-wrap gap-2 border-b border-steel-300 pb-0">
         {TABS.map((t) => (
@@ -471,10 +443,10 @@ function ResultsScreen({ result, onReset }) {
       <div className="mt-4">
         {tab === "summary" && (
           <>
-            <MarkQuantityList items={mq.beams} title="Beams — mark × length × quantity" />
-            <MarkQuantityList items={mq.columns} title="Columns — mark × length × quantity" />
-            <MarkQuantityList items={mq.bracings} title="Bracings — mark × length × quantity" />
-            <MarkQuantityList items={mq.base_plates} title="Base plates — mark × weight × quantity" />
+            <MarkQuantityList items={mq.beams} title="Beams — Mark × Length × Quantity" />
+            <MarkQuantityList items={mq.columns} title="Columns — Mark × Height × Quantity" />
+            <MarkQuantityList items={mq.bracings} title="Bracing — Mark × Length × Quantity" />
+            <MarkQuantityList items={mq.base_plates} title="Base plates — Mark × Weight × Quantity" />
             {preview.engineer_notes && (
               <pre className="mt-4 whitespace-pre-wrap border border-steel-200 bg-white/90 p-4 font-sans text-sm leading-relaxed text-steel-800">
                 {preview.engineer_notes}
@@ -483,10 +455,23 @@ function ResultsScreen({ result, onReset }) {
           </>
         )}
         {tab !== "summary" && <DataTable rows={activeRows} />}
-        {tab === "summary" && <div className="mt-4"><DataTable rows={activeRows} /></div>}
+        {tab === "summary" && (
+          <div className="mt-4">
+            <DataTable rows={activeRows} />
+          </div>
+        )}
       </div>
     </section>
   );
+}
+
+function aiStatusLabel(aiStatus) {
+  if (!aiStatus) return null;
+  const on = aiStatus.ai_configured || aiStatus.openai_configured;
+  if (!on) return { on: false, text: "AI off · set GEMINI_API_KEY in .env" };
+  const provider = aiStatus.ai_provider || "ai";
+  const model = aiStatus.ai_model || aiStatus.openai_model || "";
+  return { on: true, text: `AI on · ${provider}${model ? ` · ${model}` : ""}` };
 }
 
 export default function App() {
@@ -630,6 +615,8 @@ export default function App() {
     setProgress(8);
   };
 
+  const status = aiStatusLabel(aiStatus);
+
   return (
     <div className="app-shell min-h-screen">
       <header className="border-b border-steel-300/60 bg-white/40 backdrop-blur-sm">
@@ -637,25 +624,24 @@ export default function App() {
           <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-steel-500">
             Structural steel · PDF → Excel
           </p>
-          {aiStatus ? (
+          {status ? (
             <p
               className={`font-mono text-[11px] uppercase tracking-[0.18em] ${
-                aiStatus.openai_configured ? "text-emerald-700" : "text-ember-600"
+                status.on ? "text-emerald-700" : "text-ember-600"
               }`}
               title={
-                aiStatus.openai_configured
-                  ? `Model ${aiStatus.openai_model || "gpt-4o-mini"}`
-                  : aiStatus.openai?.hint ||
-                    "Set OPENAI_API_KEY in project-root .env and restart backend"
+                status.on
+                  ? status.text
+                  : aiStatus?.gemini?.hint ||
+                    aiStatus?.openai?.hint ||
+                    "Set GEMINI_API_KEY in project-root .env and restart backend"
               }
             >
-              {aiStatus.openai_configured
-                ? `AI on · ${aiStatus.openai_model || "gpt-4o-mini"}`
-                : "AI off · set OPENAI_API_KEY in .env"}
+              {status.text}
             </p>
           ) : (
             <p className="hidden font-mono text-[11px] text-steel-400 sm:block">
-              Beams · Columns · Base Plates · Summary
+              Beams · Columns · Bracing · Base Plates
             </p>
           )}
         </div>

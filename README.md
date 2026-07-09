@@ -1,31 +1,44 @@
 # SteelDraw AI Extractor
 
-Full-stack app that reads steel structure engineering PDF drawings like a detailer/modeler and extracts **Beams**, **Columns**, and **Base Plates** into an Excel workbook with four sheets: Beams, Columns, BasePlates, and Summary.
+Full-stack app that reads steel structure engineering PDF drawings like a
+detailer/BIM modeler and extracts **Beams**, **Columns**, **Bracing**, and
+**Base Plates** into an Excel workbook.
 
 ## Features
 
-- Upload PDFs up to **500 MB**, processed **page by page** to limit memory use
-- Detects **digital vs scanned** pages; scanned pages use OpenCV preprocessing + Tesseract OCR
+- Upload PDFs up to **500 MB**, processed **page by page**
+- Detects **digital vs scanned** pages; scanned pages use OpenCV + Tesseract OCR
 - Optional **Camelot** table extraction for member schedules
-- **Regex + OpenAI (LangChain)** extraction for marks, section sizes, lengths, elevations, materials
+- **Regex + Gemini / OpenAI (LangChain)** extraction for marks, lengths, quantities
 - **Page selection** when the drawing has more than 5 pages:
-  - Plan pages → beams & bracings
-  - Elevation pages → columns & base plates
-- Drawings with **1–5 pages** scan automatically with no page prompt
-- Excel download with engineer-style **Summary** (counts by size/length/weight)
+  - Plan pages → beams & bracing
+  - Elevation pages → columns & elevation / base plates
+- Drawings with **1–5 pages** scan automatically (no page prompt)
+- Excel download with 4 fabrication sheets + Summary
+
+### Excel sheets
+
+| Sheet | Columns |
+|-------|---------|
+| Beams | Mark \| Length_mm \| Quantity |
+| Columns | Mark \| Height_mm \| Quantity |
+| Bracing | Mark \| Length_mm \| Quantity |
+| BasePlates | Mark \| Plate_Size_mm \| Weight |
+| Summary | Total Beams/Columns/Bracing/BasePlates, Min/Max Elevation |
 
 ## Folder structure
 
 ```
 /backend
-  main.py              # FastAPI app + extraction pipeline
+  .env                 # GEMINI_API_KEY / OPENAI_API_KEY
+  main.py              # FastAPI app + extraction pipeline (edit REGEX here)
   requirements.txt
 /frontend
   index.html
   package.json
   vite.config.js
   tailwind.config.js
-  src/App.jsx          # Upload → Loading → Results UI
+  src/App.jsx          # Upload → Page select → Loading → Results
   src/main.jsx
   src/index.css
 .env.example
@@ -36,10 +49,12 @@ README.md
 
 - Python 3.10+
 - Node.js 18+
-- [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) installed on the system
-- Optional (for Camelot lattice tables): Ghostscript
+- [Tesseract OCR](https://github.com/tesseract-ocr/tesseract)
+- Optional (Camelot lattice tables): Ghostscript
+- Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey)
+  (or OpenAI key as fallback)
 
-### Install Tesseract (examples)
+### Install Tesseract
 
 ```bash
 # Ubuntu / Debian
@@ -55,15 +70,27 @@ brew install tesseract ghostscript
 
 ```bash
 cp .env.example .env
-# Edit the project-root .env (NOT only a random copy elsewhere):
-#   OPENAI_API_KEY=sk-proj-your-real-key
-# No quotes. One line. Then restart uvicorn.
 ```
 
-Confirm AI is on: open [http://127.0.0.1:8000/api/health](http://127.0.0.1:8000/api/health) — `"openai_configured": true`.  
-On startup the backend prints `[startup] OpenAI READY` or `OpenAI OFF`.
+Edit the project-root `.env` (and/or `backend/.env`):
 
-Regex/OCR extraction works without an API key. OpenAI improves mark association and the Summary narrative.
+```env
+GEMINI_API_KEY=AIza-your-real-key
+GEMINI_MODEL=gemini-2.0-flash
+
+# Optional fallback:
+# OPENAI_API_KEY=sk-proj-your-real-key
+# OPENAI_MODEL=gpt-4o-mini
+```
+
+No quotes. One line per key. Then restart uvicorn.
+
+Confirm AI is on: [http://127.0.0.1:8000/api/health](http://127.0.0.1:8000/api/health)
+→ `"ai_configured": true`, `"ai_provider": "gemini"`.
+
+On startup the backend prints `[startup] AI READY` or `AI OFF`.
+Regex/OCR extraction works without an API key; Gemini/OpenAI improves mark
+association and the Summary narrative.
 
 ### 2. Backend
 
@@ -98,68 +125,47 @@ Multipart form fields:
 |-------|-------------|
 | `file` | PDF (required on first upload) |
 | `job_id` | Returned when page selection is needed |
-| `plan_pages` | e.g. `1,2` or `1-3` (beams & bracings) |
-| `elevation_pages` | e.g. `4-6` (columns & base plates) |
-| `confirm` | `true` after the user picks pages |
+| `plan_pages` | e.g. `1,2` or `1-3` — beams & bracing |
+| `elevation_pages` | e.g. `4,5` — columns & base plates |
+| `confirm` | `true` after the user picks pages (>5 page drawings) |
 
-**Response (≤5 pages or after confirm):** JSON with `preview` tables, `counts`, and `excel_base64` for download.
+**Flow**
 
-**Response (>5 pages, not confirmed):** `{ needs_page_selection: true, job_id, page_count, message }`
+1. Upload PDF.
+2. If `page_count > 5` → response `{ needs_page_selection: true, job_id, ... }`.
+   UI asks: *From which page of plan…?* / *From which page of elevation…?*
+3. If `page_count ≤ 5` → extract immediately on all pages.
+4. Success response includes `preview` tables + `excel_base64` for Download Excel.
+
+### `GET /api/health`
+
+Returns AI provider status (`gemini` preferred, else `openai`).
 
 ### `POST /api/download`
 
-Same extraction, streams the `.xlsx` file directly (for API clients).
+Same pipeline; streams the `.xlsx` file directly (for API clients).
 
-## Excel sheets
+## AI prompt (senior detailer)
 
-1. **Beams** — Mark, Section Size, Length, Material, Start EL, End EL  
-2. **Columns** — Mark, Section Size, Height, Base/Top Elevation, Material  
-3. **BasePlates** — Mark, Plate Size, Thickness, Anchor bolts, TOC EL, Weight  
-4. **Summary** — Totals, min/max elevation, total beam length, material mix, and engineer counts such as “N columns of length L”, “N bracings of length L”, “N beams of length L”, “N base plates of weight W”
+The backend system prompt instructs the model as a Senior Steel Structure
+Detailer / BIM Modeler (15 years) to extract exactly the 4 tables above, use
+`N/A` when unreadable, and never guess for fabrication. Edit
+`AI_SYSTEM_PROMPT` in `backend/main.py` to tune behaviour.
 
-## Length association (plan drawings)
+## Editing regex
 
-On plan views, member length is taken from the dimension written in the **same direction** as the member:
+All mark / section / dimension patterns live near the top of `backend/main.py`
+under **REGEX PATTERNS** — search for `BEAM_MARK_RE`, `COLUMN_MARK_RE`,
+`BRACING_MARK_RE`, `BASE_PLATE_MARK_RE`. Comments explain each pattern so you
+can adapt them to your drawing conventions.
 
-| Mark | Direction | Length |
-|------|-----------|--------|
-| B3   | vertical dim beside beam | 1500 |
-| B8   | vertical dim (each instance) | 6000 |
-| B7   | vertical dim | 2000 |
-| B4   | horizontal dim | 6000 |
+## UI screens
 
-**Diagonal members** (BR1, BR4, or any beam/column marked diagonal/sloping) use the triangle diagonal formula:
+1. **Upload** — drag & drop PDF, show file name + size
+2. **Page select** (only if >5 pages) — plan vs elevation page numbers
+3. **Loading** — progress bar: “AI is reading your drawing…”
+4. **Results** — table preview tabs + Download Excel
 
-```text
-L = √(a² + b²)
-```
+## License
 
-where `a` and `b` are the horizontal and vertical bay spans the member covers (e.g. 3000 × 2000 → 3605.55).
-
-Tune geometry helpers in `backend/main.py`:
-- `length_from_parallel_dimension()` — orthogonal beams
-- `triangle_diagonal_length()` / `diagonal_length_from_bay()` — braces
-
-## Editing regex patterns
-
-Open `backend/main.py` and find the section marked:
-
-```text
-# REGEX PATTERNS — edit these to match your drawing conventions
-```
-
-Tune `BEAM_MARK_RE`, `COLUMN_MARK_RE`, `SECTION_SIZE_RE`, `ELEVATION_RE`, etc. for your office standards (ISMB, W-shapes, UB/UC, etc.).
-
-
-## UI flow
-
-1. **Upload** — drag & drop PDF (shows name + size)  
-2. **Page select** (only if >5 pages) — plan vs elevation pages  
-3. **Loading** — progress bar: “AI is reading your drawing…”  
-4. **Results** — table preview by tab + **Download Excel**
-
-## Notes
-
-- Large scanned sheets may need higher OCR DPI in `ocr_page_image()` (default 200).  
-- Without `OPENAI_API_KEY`, extraction relies on regex + OCR only.  
-- Temporary PDFs are stored under the system temp directory and removed after extraction.
+Internal / project use.

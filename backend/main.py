@@ -1,9 +1,10 @@
 """
 SteelDraw AI Extractor — FastAPI Backend
 =========================================
-Upload steel structure engineering PDFs, extract Beams / Columns / Base Plates
-(and Bracings for Summary), then return a multi-sheet Excel workbook.
+Upload steel structure engineering PDFs, extract Beams / Columns / Bracing /
+Base Plates into a multi-sheet Excel workbook (Mark × Length/Height × Quantity).
 
+AI: Gemini (preferred when GEMINI_API_KEY is set) or OpenAI via LangChain.
 Edit the REGEX PATTERNS section below when you need to tune mark/size matching.
 """
 
@@ -72,8 +73,8 @@ def _clean_api_key(raw: Optional[str]) -> str:
     return key
 
 
-def _read_key_from_env_file(path: Path) -> str:
-    """Read OPENAI_API_KEY from a .env file without letting empty values win."""
+def _read_named_key_from_env_file(path: Path, names: tuple[str, ...]) -> str:
+    """Read the first non-empty named key from a .env file."""
     if not path.exists():
         return ""
     try:
@@ -82,17 +83,27 @@ def _read_key_from_env_file(path: Path) -> str:
         values = dotenv_values(path) or {}
     except Exception:  # noqa: BLE001
         return ""
-    # Accept a few common misspellings / aliases
-    for name in (
-        "OPENAI_API_KEY",
-        "OPEN_AI_API_KEY",
-        "OPENAI_KEY",
-        "OPENAI_APIKEY",
-    ):
+    for name in names:
         cleaned = _clean_api_key(values.get(name))
         if cleaned:
             return cleaned
     return ""
+
+
+def _read_key_from_env_file(path: Path) -> str:
+    """Read OPENAI_API_KEY from a .env file without letting empty values win."""
+    return _read_named_key_from_env_file(
+        path,
+        ("OPENAI_API_KEY", "OPEN_AI_API_KEY", "OPENAI_KEY", "OPENAI_APIKEY"),
+    )
+
+
+def _read_gemini_key_from_env_file(path: Path) -> str:
+    """Read GEMINI_API_KEY / GOOGLE_API_KEY from a .env file."""
+    return _read_named_key_from_env_file(
+        path,
+        ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"),
+    )
 
 
 def _refresh_openai_key() -> str:
@@ -103,18 +114,34 @@ def _refresh_openai_key() -> str:
     Important: an empty OPENAI_API_KEY= in backend/.env must NOT wipe a real
     key set in the project-root .env (python-dotenv override=True would).
     """
-    # Prefer non-empty values: root .env → backend/.env → process env
     for path in (_ROOT_ENV, _BACKEND_ENV):
         key = _read_key_from_env_file(path)
         if key:
             os.environ["OPENAI_API_KEY"] = key
             return key
 
-    # Process / shell env last (also cleaned)
     key = _clean_api_key(os.getenv("OPENAI_API_KEY"))
     if key:
         os.environ["OPENAI_API_KEY"] = key
         return key
+    return ""
+
+
+def _refresh_gemini_key() -> str:
+    """Re-read Gemini / Google Generative AI key from .env files."""
+    for path in (_ROOT_ENV, _BACKEND_ENV):
+        key = _read_gemini_key_from_env_file(path)
+        if key:
+            os.environ["GEMINI_API_KEY"] = key
+            os.environ["GOOGLE_API_KEY"] = key
+            return key
+
+    for env_name in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"):
+        key = _clean_api_key(os.getenv(env_name))
+        if key:
+            os.environ["GEMINI_API_KEY"] = key
+            os.environ["GOOGLE_API_KEY"] = key
+            return key
     return ""
 
 
@@ -146,27 +173,127 @@ def _openai_key_status() -> dict[str, Any]:
     }
 
 
+def _gemini_key_status() -> dict[str, Any]:
+    """Diagnostics for Gemini — never returns the raw key."""
+    root_key = _read_gemini_key_from_env_file(_ROOT_ENV)
+    backend_key = _read_gemini_key_from_env_file(_BACKEND_ENV)
+    process_key = _clean_api_key(
+        os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    )
+    active = _refresh_gemini_key()
+    return {
+        "configured": bool(active),
+        "key_prefix": (active[:7] + "…") if active else None,
+        "key_length": len(active) if active else 0,
+        "root_env": str(_ROOT_ENV),
+        "root_env_exists": _ROOT_ENV.exists(),
+        "root_env_has_key": bool(root_key),
+        "backend_env": str(_BACKEND_ENV),
+        "backend_env_exists": _BACKEND_ENV.exists(),
+        "backend_env_has_key": bool(backend_key),
+        "process_env_has_key": bool(process_key),
+        "hint": (
+            None
+            if active
+            else (
+                f"Paste GEMINI_API_KEY=... into {_ROOT_ENV} "
+                f"(or {_BACKEND_ENV}), save, then restart uvicorn."
+            )
+        ),
+    }
+
+
+def _ai_provider_status() -> dict[str, Any]:
+    """
+    Prefer Gemini when GEMINI_API_KEY is set; otherwise fall back to OpenAI.
+    Regex/OCR extraction always runs regardless of AI keys.
+    """
+    gemini = _gemini_key_status()
+    openai = _openai_key_status()
+    if gemini["configured"]:
+        model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        return {
+            "provider": "gemini",
+            "configured": True,
+            "model": model,
+            "gemini": gemini,
+            "openai": openai,
+        }
+    if openai["configured"]:
+        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        return {
+            "provider": "openai",
+            "configured": True,
+            "model": model,
+            "gemini": gemini,
+            "openai": openai,
+        }
+    return {
+        "provider": None,
+        "configured": False,
+        "model": None,
+        "gemini": gemini,
+        "openai": openai,
+    }
+
+
+def _get_chat_llm(temperature: float = 0):
+    """
+    Build a LangChain chat model.
+    Gemini is preferred when GEMINI_API_KEY is present; else OpenAI.
+    Returns (llm, provider_name, model_name) or (None, None, None).
+    """
+    status = _ai_provider_status()
+    if not status["configured"]:
+        return None, None, None
+
+    if status["provider"] == "gemini":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        api_key = _refresh_gemini_key()
+        model_name = status["model"]
+        llm = ChatGoogleGenerativeAI(
+            model=model_name,
+            temperature=temperature,
+            google_api_key=api_key,
+        )
+        return llm, "gemini", model_name
+
+    from langchain_openai import ChatOpenAI
+
+    api_key = _refresh_openai_key()
+    model_name = status["model"]
+    llm = ChatOpenAI(
+        model=model_name,
+        temperature=temperature,
+        api_key=api_key,
+    )
+    return llm, "openai", model_name
+
+
 OPENAI_API_KEY = _refresh_openai_key()
+GEMINI_API_KEY = _refresh_gemini_key()
 MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MB
 PAGE_ASK_THRESHOLD = 5  # >5 pages → ask user which pages to scan
 
 # Startup banner so it's obvious whether AI will run
-_boot = _openai_key_status()
+_boot = _ai_provider_status()
 if _boot["configured"]:
     print(
-        f"[startup] OpenAI READY — key {_boot['key_prefix']} "
-        f"(len={_boot['key_length']}), model={os.getenv('OPENAI_MODEL', 'gpt-4o-mini')}"
+        f"[startup] AI READY — provider={_boot['provider']} "
+        f"model={_boot['model']}"
     )
 else:
     print(
-        "[startup] OpenAI OFF — regex/OCR only. "
-        f"Paste OPENAI_API_KEY=sk-... into {_ROOT_ENV} (or {_BACKEND_ENV}) and restart."
+        "[startup] AI OFF — regex/OCR only. "
+        f"Paste GEMINI_API_KEY=... (preferred) or OPENAI_API_KEY=sk-... "
+        f"into {_ROOT_ENV} (or {_BACKEND_ENV}) and restart."
     )
 
 app = FastAPI(
     title="SteelDraw AI Extractor",
-    description="Extract beams, columns, and base plates from steel drawings",
-    version="1.0.0",
+    description="Extract beams, columns, bracing, and base plates from steel drawings",
+    version="1.1.0",
 )
 
 app.add_middleware(
@@ -193,9 +320,10 @@ BEAM_MARK_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Column marks: C1, C-12, COL3, Column 4, etc.
+# Column marks: C1, C-12, COL3, Column 4, SC1 (secondary), MC (main), etc.
+# Edit this if your drawings use different column prefixes (e.g. PC, HC).
 COLUMN_MARK_RE = re.compile(
-    r"\b(?:C|COL|COLUMN)[-\s]?(\d{1,4}[A-Z]?)\b",
+    r"\b(?:SC|MC|COL|COLUMN|C)[-\s]?(\d{1,4}[A-Z]?)\b",
     re.IGNORECASE,
 )
 
@@ -730,13 +858,17 @@ def collect_page_geometry(page: pdfplumber.page.Page) -> dict[str, list[dict[str
                 item["mark"] = f"B{num.upper()}"
                 beams.append(item)
                 return True
-        if re.fullmatch(r"(?:C|COL|COLUMN)[-\s]?\d{1,4}[A-Z]?", raw, re.IGNORECASE):
+        if re.fullmatch(r"(?:SC|MC|C|COL|COLUMN)[-\s]?\d{1,4}[A-Z]?", raw, re.IGNORECASE):
             m = COLUMN_MARK_RE.search(raw)
             if m:
                 num = m.group(1)
                 if num.isdigit() and int(num) > 200:
                     return False
-                item["mark"] = f"C{num.upper()}"
+                prefix_m = re.match(r"(SC|MC|COL|COLUMN|C)", raw, re.IGNORECASE)
+                pref = (prefix_m.group(1) if prefix_m else "C").upper()
+                if pref in ("COLUMN", "COL"):
+                    pref = "C"
+                item["mark"] = f"{pref}{num.upper()}"
                 columns.append(item)
                 return True
         if re.fullmatch(r"(?:BR|BRG|BRACING)[-\s]?\d{1,4}[A-Z]?", raw, re.IGNORECASE):
@@ -1444,7 +1576,15 @@ def extract_columns_regex(
         num = m.group(1)
         if num.isdigit() and int(num) > 200:
             continue
-        mark = f"C{num.upper()}"
+        # Preserve SC / MC / COL prefixes from the drawing (edit REGEX above to add more)
+        prefix = m.group(0)
+        prefix_m = re.match(r"(SC|MC|COL|COLUMN|C)", prefix, re.IGNORECASE)
+        pref = (prefix_m.group(1) if prefix_m else "C").upper()
+        if pref == "COLUMN":
+            pref = "C"
+        elif pref == "COL":
+            pref = "C"
+        mark = f"{pref}{num.upper()}"
         if mark in seen:
             continue
         seen.add(mark)
@@ -1607,77 +1747,154 @@ def extract_bracings_regex(
 
 
 # =============================================================================
-# Optional AI enrichment via LangChain + OpenAI
+# Optional AI enrichment via LangChain + Gemini (preferred) / OpenAI
 # =============================================================================
+#
+# Senior steel detailer prompt — edit carefully; fabrication accuracy depends on it.
+# The model must return JSON that maps to these 4 fabrication tables:
+#   BEAMS:       Mark | Length_mm | Quantity
+#   COLUMNS:     Mark | Height_mm | Quantity
+#   BRACING:     Mark | Length_mm | Quantity
+#   BASE PLATES: Mark | Plate_Size_mm | Weight
+#
 
-AI_SYSTEM_PROMPT = """You are a senior steel detailer / structural steel modeler.
-Given OCR or digital text from a steel structure engineering drawing page,
-extract structural members as JSON with keys: beams, columns, base_plates, bracings.
+AI_SYSTEM_PROMPT = """You are a Senior Steel Structure Detailer and BIM Modeler with 15 years experience.
 
-beams: [{mark, section_size, length_mm, material, start_el, end_el}]
-columns: [{mark, section_size, height_mm, base_elevation, top_elevation, material}]
-base_plates: [{mark, plate_size, thickness_mm, anchor_bolt_dia, anchor_bolt_qty, top_of_concrete_el, weight_kg}]
-bracings: [{mark, section_size, length_mm, length_method}]
+TASK: Read this steel structure drawing PDF text and extract all data into tables.
 
-Rules:
-- Use marks exactly as on the drawing (B1, C3, BP2, BR1).
-- Section sizes like W18x35, ISMB400, UB457x191x67.
-- Lengths/heights in millimetres (convert metres ×1000). Convert cm ×10.
-- PLAN LENGTH RULE: the size/dimension is written in the SAME DIRECTION as the beam.
-  Vertical beams use the vertical dimension string beside them (e.g. B3=1500, B8=6000, B7=2000).
-  Horizontal beams use the horizontal dimension string (e.g. B4=6000).
-  If the same mark appears twice (two B8), each has its own parallel dimension (often both 6000).
-- DIAGONAL RULE: if a beam/column/brace is placed diagonally (e.g. BR1, BR4),
-  compute length with the triangle diagonal formula L = sqrt(a^2 + b^2)
-  where a and b are the horizontal and vertical bay spans the member covers.
-  Set length_method to e.g. "sqrt(3000^2+2000^2)".
-- If a field is unknown, use empty string.
-- Return ONLY valid JSON, no markdown.
+EXTRACT EXACTLY THESE 4 TABLES:
+
+1. BEAMS
+BEAMS: Mark | Length_mm | Quantity
+Rule: Find all BEAMS. Read the Length of each beam. Quantity = how many times that mark
+appears at that same length (count occurrences on the sheet / schedule).
+
+2. COLUMNS
+COLUMNS: Mark | Height_mm | Quantity
+Rule: Find all COLUMNS. Read the Height of each column. Quantity = how many times that
+mark appears at that same height.
+
+3. BRACING
+BRACING: Mark | Length_mm | Quantity
+Rule: Find all BRACING (BR*, BRG*). Length from schedule or √(a²+b²) for diagonals.
+Quantity = how many times that mark appears at that same length.
+
+4. BASE PLATES
+BASE PLATES: Mark | Plate_Size_mm | Weight
+Rule: Find all BASE PLATES (BP*). Plate size like 500x500x25. Weight in kg if shown.
+
+Also extract elevation callouts when present (e.g. EL (+)106.000M, B.O.BP, T.O.S)
+so Summary can report Min Elevation and Max Elevation.
+
+OUTPUT FORMAT (STRICT):
+Return ONLY valid JSON (no markdown fences, no CSV, no commentary) with this shape:
+{
+  "beams": [{"mark":"B1","length_mm":6000,"quantity":4,"section_size":"","material":"","start_el":"","end_el":""}],
+  "columns": [{"mark":"C1","height_mm":5700,"quantity":2,"section_size":"","base_elevation":"","top_elevation":"","material":""}],
+  "bracings": [{"mark":"BR1","length_mm":3606,"quantity":2,"section_size":"","length_method":"sqrt(a^2+b^2)"}],
+  "base_plates": [{"mark":"BP1","plate_size":"500x500x25","weight_kg":48,"thickness_mm":"","anchor_bolt_dia":"","anchor_bolt_qty":"","top_of_concrete_el":""}],
+  "summary": {
+    "total_beams": 0,
+    "total_columns": 0,
+    "total_bracing": 0,
+    "total_base_plates": 0,
+    "min_elevation": "N/A",
+    "max_elevation": "N/A"
+  }
+}
+
+IMPORTANT RULES:
+1. If you can't read a value, write "N/A" — do NOT guess. Fabrication accuracy is critical.
+2. Look in General Notes, Beam Schedules, Column Schedules, Detail callouts, and plan/elevation marks.
+3. Be 100% accurate. This is for fabrication.
+4. Use marks exactly as on the drawing (B1, C3, BP2, BR1, SC1, MC, CT1).
+5. Lengths/heights in millimetres (convert metres ×1000; cm ×10).
+6. PLAN LENGTH RULE: the dimension is written in the SAME DIRECTION as the beam.
+   Vertical beams use the vertical dimension beside them; horizontal beams use the
+   horizontal dimension. Same mark at different lengths → separate rows.
+7. DIAGONAL RULE: for diagonal bracing/beams, L = sqrt(a^2 + b^2) from bay spans.
+8. Quantity must be an integer count of occurrences (not a guess of shipping qty).
+9. Return ONLY valid JSON.
 """
+
+
+def _na(value: Any) -> Any:
+    """Normalize blank / N/A placeholders."""
+    if value is None:
+        return "N/A"
+    s = str(value).strip()
+    if not s or s.lower() in {"none", "null", "unknown", "-"}:
+        return "N/A"
+    return value if not isinstance(value, str) else s
+
+
+def _expand_quantity_rows(
+    rows: list[dict[str, Any]],
+    length_key: str,
+) -> list[dict[str, Any]]:
+    """
+    Expand AI rows that include an explicit Quantity into N instance rows
+    so regex-style counting (_count_by_mark_and_length) stays consistent.
+    """
+    expanded: list[dict[str, Any]] = []
+    for row in rows:
+        qty_raw = row.get("Quantity", row.get("quantity", 1))
+        try:
+            qty = int(float(qty_raw))
+        except (TypeError, ValueError):
+            qty = 1
+        qty = max(1, qty)
+        for i in range(qty):
+            clone = dict(row)
+            clone.pop("Quantity", None)
+            clone.pop("quantity", None)
+            clone["_instance"] = f"ai-{i}"
+            # Keep length/height as-is for grouping
+            if length_key in clone and clone[length_key] in ("", None, "N/A"):
+                clone[length_key] = ""
+            expanded.append(clone)
+    return expanded
 
 
 def ai_extract_from_text(text: str, page_no: int) -> dict[str, list[dict]]:
     """
-    Call OpenAI (via langchain) to enrich extraction.
+    Call Gemini (preferred) or OpenAI via LangChain to enrich extraction.
     Returns empty lists if no API key or on failure — regex results still apply.
     Prints the raw AI response to the console for debugging.
     """
-    empty = {"beams": [], "columns": [], "base_plates": [], "bracings": []}
-    api_key = _refresh_openai_key()
-    if not api_key or not text.strip():
-        if not api_key:
-            st = _openai_key_status()
+    empty = {"beams": [], "columns": [], "base_plates": [], "bracings": [], "summary": {}}
+    llm, provider, model_name = _get_chat_llm(temperature=0)
+    if llm is None or not text.strip():
+        if llm is None:
+            st = _ai_provider_status()
             reason = (
-                "OPENAI_API_KEY not set — "
-                f"root .env has key={st['root_env_has_key']}, "
-                f"backend .env has key={st['backend_env_has_key']}. "
-                f"Edit {st['root_env']} to OPENAI_API_KEY=sk-... then restart uvicorn"
+                "No AI key — set GEMINI_API_KEY (preferred) or OPENAI_API_KEY in "
+                f"{st['gemini']['root_env']} / {st['gemini']['backend_env']}"
             )
         else:
             reason = "empty page text"
         print(f"[AI extract] SKIPPED page {page_no} — {reason}")
         return empty
     try:
-        from langchain_openai import ChatOpenAI
         from langchain_core.messages import HumanMessage, SystemMessage
         import json
 
-        model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-        llm = ChatOpenAI(
-            model=model_name,
-            temperature=0,
-            api_key=api_key,
-        )
         # Cap text to keep token usage reasonable on huge sheets
-        clipped = text[:12000]
+        clipped = text[:14000]
         print(f"\n{'=' * 72}")
-        print(f"[AI extract] CALLING model={model_name} page={page_no} chars={len(clipped)}")
+        print(
+            f"[AI extract] CALLING provider={provider} model={model_name} "
+            f"page={page_no} chars={len(clipped)}"
+        )
         print(f"{'=' * 72}")
         resp = llm.invoke(
             [
                 SystemMessage(content=AI_SYSTEM_PROMPT),
                 HumanMessage(
-                    content=f"Page {page_no} drawing text:\n\n{clipped}\n\nExtract members as JSON."
+                    content=(
+                        f"Page {page_no} steel structure drawing text:\n\n{clipped}\n\n"
+                        "Extract Beams, Columns, Bracing, and Base Plates as JSON only."
+                    )
                 ),
             ]
         )
@@ -1692,13 +1909,19 @@ def ai_extract_from_text(text: str, page_no: int) -> dict[str, list[dict]]:
         # Strip optional ```json fences
         cleaned = re.sub(r"^```(?:json)?\s*", "", content.strip())
         cleaned = re.sub(r"\s*```$", "", cleaned)
+        # Some models wrap JSON in prose — grab the outermost object
+        if not cleaned.lstrip().startswith("{"):
+            match = re.search(r"\{[\s\S]*\}", cleaned)
+            if match:
+                cleaned = match.group(0)
 
         data = json.loads(cleaned)
         parsed = {
             "beams": data.get("beams") or [],
             "columns": data.get("columns") or [],
             "base_plates": data.get("base_plates") or data.get("basePlates") or [],
-            "bracings": data.get("bracings") or [],
+            "bracings": data.get("bracings") or data.get("bracing") or [],
+            "summary": data.get("summary") or {},
         }
         print(
             f"[AI extract] PARSED page {page_no}: "
@@ -1718,63 +1941,69 @@ def _merge_ai_beams(ai_rows: list[dict], page_no: int) -> list[dict[str, Any]]:
     out = []
     for r in ai_rows:
         mark = str(r.get("mark") or "").upper().replace(" ", "")
-        if not mark:
+        if not mark or mark.upper() == "N/A":
             continue
         if not mark.startswith("B"):
             mark = f"B{mark}"
-        out.append(
-            {
-                "Mark": mark,
-                "Section Size": _normalize_section(str(r.get("section_size") or "")),
-                "Length (mm)": r.get("length_mm") or "",
-                "Material": r.get("material") or "",
-                "Start EL": r.get("start_el") or "",
-                "End EL": r.get("end_el") or "",
-                "Page": page_no,
-            }
-        )
-    return out
+        length = r.get("length_mm") if r.get("length_mm") not in (None, "", "N/A") else ""
+        qty = r.get("quantity", 1)
+        row = {
+            "Mark": mark,
+            "Section Size": _normalize_section(str(r.get("section_size") or "")) or "N/A",
+            "Length (mm)": length if length != "N/A" else "",
+            "Material": _na(r.get("material")),
+            "Start EL": _na(r.get("start_el")),
+            "End EL": _na(r.get("end_el")),
+            "Quantity": qty,
+            "Page": page_no,
+        }
+        out.append(row)
+    return _expand_quantity_rows(out, "Length (mm)")
 
 
 def _merge_ai_columns(ai_rows: list[dict], page_no: int) -> list[dict[str, Any]]:
     out = []
     for r in ai_rows:
         mark = str(r.get("mark") or "").upper().replace(" ", "")
-        if not mark:
+        if not mark or mark.upper() == "N/A":
             continue
-        if not mark.startswith("C"):
+        if not mark.startswith("C") and not mark.startswith("SC") and not mark.startswith("MC"):
             mark = f"C{mark}"
-        out.append(
-            {
-                "Mark": mark,
-                "Section Size": _normalize_section(str(r.get("section_size") or "")),
-                "Height (mm)": r.get("height_mm") or "",
-                "Base Elevation": r.get("base_elevation") or "",
-                "Top Elevation": r.get("top_elevation") or "",
-                "Material": r.get("material") or "",
-                "Page": page_no,
-            }
-        )
-    return out
+        height = r.get("height_mm") if r.get("height_mm") not in (None, "", "N/A") else ""
+        qty = r.get("quantity", 1)
+        row = {
+            "Mark": mark,
+            "Section Size": _normalize_section(str(r.get("section_size") or "")) or "N/A",
+            "Height (mm)": height if height != "N/A" else "",
+            "Base Elevation": _na(r.get("base_elevation")),
+            "Top Elevation": _na(r.get("top_elevation")),
+            "Material": _na(r.get("material")),
+            "Quantity": qty,
+            "Page": page_no,
+        }
+        out.append(row)
+    return _expand_quantity_rows(out, "Height (mm)")
 
 
 def _merge_ai_base_plates(ai_rows: list[dict], page_no: int) -> list[dict[str, Any]]:
     out = []
     for r in ai_rows:
         mark = str(r.get("mark") or "").upper().replace(" ", "")
-        if not mark:
+        if not mark or mark.upper() == "N/A":
             continue
         if not mark.startswith("BP"):
             mark = f"BP{mark}" if not mark.startswith("B") else mark
+        plate = str(r.get("plate_size") or r.get("plate_size_mm") or "").replace("×", "x")
+        weight = r.get("weight_kg") if r.get("weight_kg") not in (None, "", "N/A") else "N/A"
         out.append(
             {
                 "Mark": mark,
-                "Plate Size": str(r.get("plate_size") or "").replace("×", "x"),
-                "Thickness (mm)": r.get("thickness_mm") or "",
-                "Anchor Bolt Dia": r.get("anchor_bolt_dia") or "",
-                "Anchor Bolt Qty": r.get("anchor_bolt_qty") or "",
-                "Top of Concrete EL": r.get("top_of_concrete_el") or "",
-                "Weight (kg)": r.get("weight_kg") or "",
+                "Plate Size": plate or "N/A",
+                "Thickness (mm)": _na(r.get("thickness_mm")),
+                "Anchor Bolt Dia": _na(r.get("anchor_bolt_dia")),
+                "Anchor Bolt Qty": _na(r.get("anchor_bolt_qty")),
+                "Top of Concrete EL": _na(r.get("top_of_concrete_el")),
+                "Weight (kg)": weight,
                 "Page": page_no,
             }
         )
@@ -1785,20 +2014,22 @@ def _merge_ai_bracings(ai_rows: list[dict], page_no: int) -> list[dict[str, Any]
     out = []
     for r in ai_rows:
         mark = str(r.get("mark") or "").upper().replace(" ", "")
-        if not mark:
+        if not mark or mark.upper() == "N/A":
             continue
         if not mark.startswith("BR"):
             mark = f"BR{mark}"
-        out.append(
-            {
-                "Mark": mark,
-                "Section Size": _normalize_section(str(r.get("section_size") or "")),
-                "Length (mm)": r.get("length_mm") or "",
-                "Length Method": r.get("length_method") or "",
-                "Page": page_no,
-            }
-        )
-    return out
+        length = r.get("length_mm") if r.get("length_mm") not in (None, "", "N/A") else ""
+        qty = r.get("quantity", 1)
+        row = {
+            "Mark": mark,
+            "Section Size": _normalize_section(str(r.get("section_size") or "")) or "N/A",
+            "Length (mm)": length if length != "N/A" else "",
+            "Length Method": _na(r.get("length_method")),
+            "Quantity": qty,
+            "Page": page_no,
+        }
+        out.append(row)
+    return _expand_quantity_rows(out, "Length (mm)")
 
 
 def dedupe_by_mark(rows: list[dict[str, Any]], allow_multi: bool = False) -> list[dict[str, Any]]:
@@ -2162,29 +2393,32 @@ def build_summary(
     text_snippets: list[str],
 ) -> tuple[list[dict[str, Any]], str]:
     """
-    Sheet4 Summary content:
-    - Totals, min/max elevation, total beam length, material summary
-    - Mark × length × quantity sentences, e.g.:
-        Beam B3 are 4 of length 1500
-        Beam B3 are 8 of length 2000
-        Beam B7 are 76 of length 2000
+    Summary sheet:
+      Total Beams, Total Columns, Total Bracing, Total BasePlates,
+      Min Elevation, Max Elevation
+    plus mark × length × quantity takeoff sentences.
     """
     rows: list[dict[str, Any]] = []
 
     def add(category: str, metric: str, value: Any) -> None:
         rows.append({"Category": category, "Metric": metric, "Value": value})
 
-    add("Totals", "Beam Count", len(beams))
-    add("Totals", "Column Count", len(columns))
-    add("Totals", "Base Plate Count", len(base_plates))
-    add("Totals", "Bracing Count", len(bracings))
+    beam_mq = _count_by_mark_and_length(beams, "Length (mm)")
+    col_mq = _count_by_mark_and_length(columns, "Height (mm)")
+    brace_mq = _count_by_mark_and_length(bracings, "Length (mm)")
+    # Base plates: unique marks (quantity = occurrence count of each mark)
+    bp_mark_counts = Counter(str(r.get("Mark") or "UNKNOWN") for r in base_plates)
+    total_beams = sum(c for _, _, c in beam_mq) if beam_mq else len(beams)
+    total_columns = sum(c for _, _, c in col_mq) if col_mq else len(columns)
+    total_bracing = sum(c for _, _, c in brace_mq) if brace_mq else len(bracings)
+    total_base_plates = len(base_plates)
 
-    # Beam length totals
-    beam_lens = _numeric_series(beams, "Length (mm)")
-    add("Beams", "Total Beam Length (mm)", round(sum(beam_lens), 1) if beam_lens else 0)
-    add("Beams", "Total Beam Length (m)", round(sum(beam_lens) / 1000, 2) if beam_lens else 0)
+    add("Totals", "Total Beams", total_beams)
+    add("Totals", "Total Columns", total_columns)
+    add("Totals", "Total Bracing", total_bracing)
+    add("Totals", "Total BasePlates", total_base_plates)
 
-    # Elevations across members
+    # Elevations across members + free text (EL callouts)
     elevs: list[float] = []
     for r in beams:
         elevs.extend(_numeric_series([r], "Start EL"))
@@ -2194,13 +2428,28 @@ def build_summary(
         elevs.extend(_numeric_series([r], "Top Elevation"))
     for r in base_plates:
         elevs.extend(_numeric_series([r], "Top of Concrete EL"))
-    add("Elevations", "Min Elevation", min(elevs) if elevs else "")
-    add("Elevations", "Max Elevation", max(elevs) if elevs else "")
+    # Also scrape elevation-like numbers from page text snippets
+    elev_re = re.compile(
+        r"(?:EL\.?|ELEV(?:ATION)?)\s*[:=]?\s*\(?\s*([+-]?\d+(?:\.\d+)?)\s*\)?\s*M?",
+        re.IGNORECASE,
+    )
+    for snippet in text_snippets:
+        for m in elev_re.finditer(snippet or ""):
+            try:
+                elevs.append(float(m.group(1)))
+            except ValueError:
+                continue
 
-    # --- Mark × Length × Quantity (primary takeoff view) ---
-    beam_mq = _count_by_mark_and_length(beams, "Length (mm)")
-    col_mq = _count_by_mark_and_length(columns, "Height (mm)")
-    brace_mq = _count_by_mark_and_length(bracings, "Length (mm)")
+    min_el = min(elevs) if elevs else "N/A"
+    max_el = max(elevs) if elevs else "N/A"
+    add("Elevations", "Min Elevation", min_el)
+    add("Elevations", "Max Elevation", max_el)
+
+    # Beam length totals
+    beam_lens = _numeric_series(beams, "Length (mm)")
+    add("Beams", "Total Beam Length (mm)", round(sum(beam_lens), 1) if beam_lens else 0)
+    add("Beams", "Total Beam Length (m)", round(sum(beam_lens) / 1000, 2) if beam_lens else 0)
+
     bp_mq = _count_by_mark_and_length(base_plates, "Weight (kg)")
 
     for mark, length, cnt in beam_mq:
@@ -2228,6 +2477,8 @@ def build_summary(
     mat_counter: Counter = Counter()
     for r in beams + columns:
         mat = r.get("Material") or "UNKNOWN"
+        if str(mat).upper() in {"N/A", "UNKNOWN", ""}:
+            mat = "UNKNOWN"
         mat_counter[str(mat)] += 1
     for mat, cnt in sorted(mat_counter.items(), key=lambda x: (-x[1], x[0])):
         add("Material Summary", mat, cnt)
@@ -2241,81 +2492,59 @@ def build_summary(
     notes_lines = [
         "SENIOR STEEL STRUCTURE ENGINEER — DRAWING SUMMARY",
         "=" * 56,
-        f"This drawing set contains {len(columns)} column(s), {len(beams)} beam(s), "
-        f"{len(bracings)} bracing(s), and {len(base_plates)} base plate(s).",
+        f"Total Beams: {total_beams} | Total Columns: {total_columns} | "
+        f"Total Bracing: {total_bracing} | Total BasePlates: {total_base_plates}",
+        f"Min Elevation: {min_el} | Max Elevation: {max_el}",
         "",
     ]
 
     if beam_mq:
-        notes_lines.append("BEAMS (mark × length × quantity):")
+        notes_lines.append("BEAMS (Mark | Length_mm | Quantity):")
         for mark, length, cnt in beam_mq:
-            notes_lines.append(
-                f"  • {_mark_quantity_sentence('Beam', mark, cnt, length, 'length')}"
-            )
+            notes_lines.append(f"  • {mark} | {length} | {cnt}")
         notes_lines.append("")
 
     if col_mq:
-        notes_lines.append("COLUMNS (mark × length × quantity):")
+        notes_lines.append("COLUMNS (Mark | Height_mm | Quantity):")
         for mark, length, cnt in col_mq:
-            notes_lines.append(
-                f"  • {_mark_quantity_sentence('Column', mark, cnt, length, 'length')}"
-            )
+            notes_lines.append(f"  • {mark} | {length} | {cnt}")
         notes_lines.append("")
 
     if brace_mq:
-        notes_lines.append("BRACINGS (mark × length × quantity):")
+        notes_lines.append("BRACING (Mark | Length_mm | Quantity):")
         for mark, length, cnt in brace_mq:
-            notes_lines.append(
-                f"  • {_mark_quantity_sentence('Bracing', mark, cnt, length, 'length')}"
-            )
+            notes_lines.append(f"  • {mark} | {length} | {cnt}")
         notes_lines.append("")
 
-    if bp_mq:
-        notes_lines.append("BASE PLATES (mark × weight × quantity):")
-        for mark, weight, cnt in bp_mq:
-            notes_lines.append(
-                f"  • {_mark_quantity_sentence('Base plate', mark, cnt, weight, 'weight')}"
-            )
+    if bp_mark_counts:
+        notes_lines.append("BASE PLATES (Mark | Plate_Size_mm | Weight):")
+        seen_bp: set[str] = set()
+        for r in base_plates:
+            mark = str(r.get("Mark") or "UNKNOWN")
+            if mark in seen_bp:
+                continue
+            seen_bp.add(mark)
+            plate = r.get("Plate Size") or "N/A"
+            weight = r.get("Weight (kg)") or "N/A"
+            notes_lines.append(f"  • {mark} | {plate} | {weight}")
         notes_lines.append("")
-
-    if elevs:
-        notes_lines.append(
-            f"Elevation range observed: {min(elevs)} to {max(elevs)} "
-            "(verify against grid/EL callouts on the sheets)."
-        )
-    if beam_lens:
-        notes_lines.append(
-            f"Aggregate beam length: {round(sum(beam_lens)/1000, 2)} m "
-            f"({round(sum(beam_lens), 1)} mm)."
-        )
-    if mat_counter:
-        mats = ", ".join(f"{m} ({c})" for m, c in mat_counter.most_common())
-        notes_lines.append(f"Material mix: {mats}.")
 
     notes_lines.extend(
         [
-            "",
             "Recommendation: Cross-check marks against the member schedule / BOM "
-            "and confirm start/end elevations on the elevation sheets before fabrication.",
+            "and confirm elevations on the elevation sheets before fabrication.",
         ]
     )
 
     # Optional AI polish — keep mark/length/quantity sentences intact
     engineer_notes = "\n".join(notes_lines)
-    api_key = _refresh_openai_key()
-    if api_key:
+    llm, provider, model_name = _get_chat_llm(temperature=0.2)
+    if llm is not None:
         try:
-            from langchain_openai import ChatOpenAI
             from langchain_core.messages import HumanMessage, SystemMessage
 
-            model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-            llm = ChatOpenAI(
-                model=model_name,
-                temperature=0.2,
-                api_key=api_key,
-            )
             print(f"\n{'=' * 72}")
-            print(f"[AI summary] CALLING model={model_name}")
+            print(f"[AI summary] CALLING provider={provider} model={model_name}")
             print(f"{'=' * 72}")
             polish = llm.invoke(
                 [
@@ -2323,9 +2552,9 @@ def build_summary(
                         content=(
                             "You are a senior structural steel engineer. "
                             "Rewrite into a concise professional summary. "
-                            "KEEP every mark/length/quantity sentence exactly, e.g. "
-                            "'Beam B3 are 4 of length 1500', "
-                            "'Beam B7 are 76 of length 2000'. Plain text only."
+                            "KEEP every Mark | Length/Height | Quantity line exactly. "
+                            "Include Total Beams/Columns/Bracing/BasePlates and "
+                            "Min/Max Elevation. Plain text only."
                         )
                     ),
                     HumanMessage(content=engineer_notes[:8000]),
@@ -2342,12 +2571,11 @@ def build_summary(
         except Exception as exc:  # noqa: BLE001
             print(f"[AI summary] ERROR: {exc}")
     else:
-        st = _openai_key_status()
+        st = _ai_provider_status()
         print(
-            "[AI summary] SKIPPED — OPENAI_API_KEY not set — "
-            f"root .env has key={st['root_env_has_key']}, "
-            f"backend .env has key={st['backend_env_has_key']}. "
-            f"Edit {st['root_env']} then restart uvicorn"
+            "[AI summary] SKIPPED — no AI key — "
+            f"gemini={st['gemini']['configured']} openai={st['openai']['configured']}. "
+            f"Edit {st['gemini']['root_env']} then restart uvicorn"
         )
 
     add("Engineer Notes", "Narrative", engineer_notes)
@@ -2355,7 +2583,7 @@ def build_summary(
 
 
 # =============================================================================
-# Excel workbook
+# Excel workbook — 4 fabrication tables + Summary
 # =============================================================================
 
 HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
@@ -2381,101 +2609,134 @@ def _write_sheet(ws, rows: list[dict], columns: list[str]) -> None:
 
 
 def _beams_takeoff_rows(beams: list[dict]) -> list[dict[str, Any]]:
-    """
-    Beams Excel sheet: only Mark, Quantity, Length — one row per mark+length.
-    Example:
-      B3 | 4 | 1500
-      B3 | 8 | 2000
-      B3 | 2 | 6000
-      B7 | 76 | 2000
-    """
+    """BEAMS: Mark | Length_mm | Quantity"""
     grouped = _count_by_mark_and_length(beams, "Length (mm)")
     return [
         {
             "Mark": mark,
+            "Length_mm": length if length != "UNKNOWN" else "N/A",
             "Quantity": qty,
-            "Length": length if length != "UNKNOWN" else "",
         }
         for mark, length, qty in grouped
     ]
 
 
+def _columns_takeoff_rows(columns: list[dict]) -> list[dict[str, Any]]:
+    """COLUMNS: Mark | Height_mm | Quantity"""
+    grouped = _count_by_mark_and_length(columns, "Height (mm)")
+    return [
+        {
+            "Mark": mark,
+            "Height_mm": length if length != "UNKNOWN" else "N/A",
+            "Quantity": qty,
+        }
+        for mark, length, qty in grouped
+    ]
+
+
+def _bracing_takeoff_rows(bracings: list[dict]) -> list[dict[str, Any]]:
+    """BRACING: Mark | Length_mm | Quantity"""
+    grouped = _count_by_mark_and_length(bracings, "Length (mm)")
+    return [
+        {
+            "Mark": mark,
+            "Length_mm": length if length != "UNKNOWN" else "N/A",
+            "Quantity": qty,
+        }
+        for mark, length, qty in grouped
+    ]
+
+
+def _base_plates_takeoff_rows(base_plates: list[dict]) -> list[dict[str, Any]]:
+    """
+    BASE PLATES: Mark | Plate_Size_mm | Weight
+    One row per unique mark (richest plate size / weight kept).
+    """
+    best: dict[str, dict[str, Any]] = {}
+    for r in base_plates:
+        mark = str(r.get("Mark") or "").strip()
+        if not mark:
+            continue
+        plate = r.get("Plate Size") or "N/A"
+        weight = r.get("Weight (kg)")
+        if weight in ("", None):
+            weight = "N/A"
+        score = sum(1 for v in (plate, weight) if v not in ("", None, "N/A"))
+        if mark not in best or score > best[mark]["_score"]:
+            best[mark] = {
+                "Mark": mark,
+                "Plate_Size_mm": plate if plate not in ("", None) else "N/A",
+                "Weight": weight,
+                "_score": score,
+            }
+    rows = []
+    for mark in sorted(best.keys()):
+        item = best[mark]
+        rows.append(
+            {
+                "Mark": item["Mark"],
+                "Plate_Size_mm": item["Plate_Size_mm"],
+                "Weight": item["Weight"],
+            }
+        )
+    return rows
+
+
 def build_excel(result: dict[str, Any]) -> bytes:
+    """
+    Excel workbook with exactly 4 fabrication sheets + Summary:
+      1. Beams       — Mark | Length_mm | Quantity
+      2. Columns     — Mark | Height_mm | Quantity
+      3. Bracing     — Mark | Length_mm | Quantity
+      4. BasePlates  — Mark | Plate_Size_mm | Weight
+      5. Summary     — totals + min/max elevation + narrative
+    """
     wb = Workbook()
 
-    # Sheet 1 — Beams (Mark / Quantity / Length only)
+    # Sheet 1 — Beams
     ws1 = wb.active
     ws1.title = "Beams"
     _write_sheet(
         ws1,
         _beams_takeoff_rows(result.get("beams") or []),
-        ["Mark", "Quantity", "Length"],
+        ["Mark", "Length_mm", "Quantity"],
     )
 
     # Sheet 2 — Columns
     ws2 = wb.create_sheet("Columns")
     _write_sheet(
         ws2,
-        result["columns"],
-        [
-            "Mark",
-            "Section Size",
-            "Height (mm)",
-            "Base Elevation",
-            "Top Elevation",
-            "Material",
-            "Page",
-        ],
+        _columns_takeoff_rows(result.get("columns") or []),
+        ["Mark", "Height_mm", "Quantity"],
     )
 
-    # Sheet 3 — BasePlates
-    ws3 = wb.create_sheet("BasePlates")
+    # Sheet 3 — Bracing
+    ws3 = wb.create_sheet("Bracing")
     _write_sheet(
         ws3,
-        result["base_plates"],
-        [
-            "Mark",
-            "Plate Size",
-            "Thickness (mm)",
-            "Anchor Bolt Dia",
-            "Anchor Bolt Qty",
-            "Top of Concrete EL",
-            "Weight (kg)",
-            "Page",
-        ],
+        _bracing_takeoff_rows(result.get("bracings") or []),
+        ["Mark", "Length_mm", "Quantity"],
     )
 
-    # Sheet 4 — Summary
-    ws4 = wb.create_sheet("Summary")
-    _write_sheet(ws4, result["summary"], ["Category", "Metric", "Value"])
-    # Append bracing table under narrative for transparency
-    brace_start = len(result["summary"]) + 16
-    ws4.cell(
-        row=brace_start,
-        column=1,
-        value="Bracing Lengths (√(a²+b²) when diagonal)",
-    ).font = Font(bold=True)
-    brace_rows = result.get("bracings") or []
-    if brace_rows:
-        headers = ["Mark", "Section Size", "Length (mm)", "Length Method", "Page"]
-        for c_idx, h in enumerate(headers, start=1):
-            cell = ws4.cell(row=brace_start + 1, column=c_idx, value=h)
-            cell.fill = HEADER_FILL
-            cell.font = HEADER_FONT
-        for r_idx, br in enumerate(brace_rows, start=brace_start + 2):
-            ws4.cell(row=r_idx, column=1, value=br.get("Mark", ""))
-            ws4.cell(row=r_idx, column=2, value=br.get("Section Size", ""))
-            ws4.cell(row=r_idx, column=3, value=br.get("Length (mm)", ""))
-            ws4.cell(row=r_idx, column=4, value=br.get("Length Method", ""))
-            ws4.cell(row=r_idx, column=5, value=br.get("Page", ""))
+    # Sheet 4 — BasePlates
+    ws4 = wb.create_sheet("BasePlates")
+    _write_sheet(
+        ws4,
+        _base_plates_takeoff_rows(result.get("base_plates") or []),
+        ["Mark", "Plate_Size_mm", "Weight"],
+    )
+
+    # Sheet 5 — Summary
+    ws5 = wb.create_sheet("Summary")
+    _write_sheet(ws5, result["summary"], ["Category", "Metric", "Value"])
 
     # Append full narrative at the bottom for readability
     start = len(result["summary"]) + 3
-    ws4.cell(row=start, column=1, value="Engineer Narrative").font = Font(bold=True)
-    cell = ws4.cell(row=start + 1, column=1, value=result.get("engineer_notes", ""))
+    ws5.cell(row=start, column=1, value="Engineer Narrative").font = Font(bold=True)
+    cell = ws5.cell(row=start + 1, column=1, value=result.get("engineer_notes", ""))
     cell.alignment = Alignment(wrap_text=True, vertical="top")
     cell.fill = NOTE_FILL
-    ws4.merge_cells(start_row=start + 1, start_column=1, end_row=start + 12, end_column=3)
+    ws5.merge_cells(start_row=start + 1, start_column=1, end_row=start + 12, end_column=3)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -2489,15 +2750,18 @@ def build_excel(result: dict[str, Any]) -> bytes:
 
 @app.get("/api/health")
 def health():
-    status = _openai_key_status()
+    status = _ai_provider_status()
     return {
         "status": "ok",
         "app": "SteelDraw AI Extractor",
+        "ai_configured": status["configured"],
+        "ai_provider": status["provider"],
+        "ai_model": status["model"],
+        # Back-compat aliases used by older frontend builds
         "openai_configured": status["configured"],
-        "openai_model": os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-        if status["configured"]
-        else None,
-        "openai": status,
+        "openai_model": status["model"],
+        "gemini": status["gemini"],
+        "openai": status["openai"],
         "env_files": {
             "root": str(_ROOT_ENV),
             "root_exists": _ROOT_ENV.exists(),
@@ -2598,9 +2862,9 @@ async def upload(
                 "page_count": page_count,
                 "filename": filename,
                 "message": (
-                    f"This drawing has {page_count} pages. "
-                    "Select which plan page(s) to use for beam & bracing details, "
-                    "and which elevation page(s) to use for column & elevation / base plate details."
+                    f"This drawing has {page_count} pages (>5). "
+                    "From which page of plan do you want the beam and bracing details? "
+                    "From which page of elevation do you want column and elevation details?"
                 ),
             }
         )
@@ -2654,6 +2918,12 @@ async def upload(
     b64 = base64.b64encode(excel_bytes).decode("ascii")
     download_name = f"{Path(filename).stem}_SteelDraw_Extract.xlsx"
 
+    # Preview tables match Excel fabrication sheets exactly
+    beams_preview = _beams_takeoff_rows(result["beams"])
+    columns_preview = _columns_takeoff_rows(result["columns"])
+    bracing_preview = _bracing_takeoff_rows(result["bracings"])
+    base_plates_preview = _base_plates_takeoff_rows(result["base_plates"])
+
     return JSONResponse(
         {
             "needs_page_selection": False,
@@ -2663,21 +2933,22 @@ async def upload(
             "download_filename": download_name,
             "excel_base64": b64,
             "preview": {
-                "beams": result["beams"],
-                "columns": result["columns"],
-                "base_plates": result["base_plates"],
-                "bracings": result["bracings"],
+                "beams": beams_preview,
+                "columns": columns_preview,
+                "bracings": bracing_preview,
+                "base_plates": base_plates_preview,
                 "summary": result["summary"],
                 "engineer_notes": result["engineer_notes"],
                 "mark_quantity": result.get("mark_quantity") or {},
             },
             "counts": {
-                "beams": len(result["beams"]),
-                "columns": len(result["columns"]),
-                "base_plates": len(result["base_plates"]),
-                "bracings": len(result["bracings"]),
+                "beams": sum(r["Quantity"] for r in beams_preview),
+                "columns": sum(r["Quantity"] for r in columns_preview),
+                "bracings": sum(r["Quantity"] for r in bracing_preview),
+                "base_plates": len(base_plates_preview),
             },
             "page_sources": result["page_sources"],
+            "ai": _ai_provider_status(),
         }
     )
 

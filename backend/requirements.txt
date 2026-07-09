@@ -3,7 +3,9 @@ uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 python-dotenv==1.0.1
 pdfplumber==0.11.4
-camelot-py[cv]==0.11.0
+# camelot-py needs Ghostscript; install optionally if you want lattice table extraction:
+#   pip install "camelot-py[cv]==0.11.0" ghostscript
+camelot-py==0.11.0
 pytesseract==0.3.13
 opencv-python-headless==4.10.0.84
 numpy==1.26.4
@@ -11,7 +13,9 @@ pandas==2.2.3
 openpyxl==3.1.5
 langchain==0.3.14
 langchain-openai==0.3.0
+langchain-google-genai==2.0.8
 openai==1.59.3
+google-generativeai==0.8.4
 pypdf==5.1.0
 Pillow==11.1.0
 aiofiles==24.1.0
