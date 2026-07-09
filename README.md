@@ -9,7 +9,9 @@ detailer/BIM modeler and extracts **Beams**, **Columns**, **Bracing**, and
 - Upload PDFs up to **500 MB**, processed **page by page**
 - Detects **digital vs scanned** pages; scanned pages use OpenCV + Tesseract OCR
 - Optional **Camelot** table extraction for member schedules
-- **Regex + Gemini / OpenAI (LangChain)** extraction for marks, lengths, quantities
+- **Regex + Gemini / OpenAI vision (LangChain)** — page IMAGE is sent so the model
+  reads bay dimensions (e.g. BR1 beside 3000×1500 → √(a²+b²)) from THIS drawing
+- No hardcoded project sizes — next drawing can have different bay legs
 - **Page selection** when the drawing has more than 5 pages:
   - Plan pages → beams & bracing
   - Elevation pages → columns & elevation / base plates

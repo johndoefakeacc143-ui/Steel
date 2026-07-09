@@ -10,6 +10,7 @@ Edit the REGEX PATTERNS section below when you need to tune mark/size matching.
 
 from __future__ import annotations
 
+import base64
 import io
 import os
 import re
@@ -211,7 +212,7 @@ def _ai_provider_status() -> dict[str, Any]:
     gemini = _gemini_key_status()
     openai = _openai_key_status()
     if gemini["configured"]:
-        model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")  # vision-capable
         return {
             "provider": "gemini",
             "configured": True,
@@ -387,8 +388,8 @@ ELEVATION_PAREN_RE = re.compile(
 )
 
 # ---------------------------------------------------------------------------
-# Standard plan bay / member lengths (mm) — edit for your project grids.
-# OCR often invents 1749 / 3319 / 9452; we snap or reject to these.
+# Common bay sizes used ONLY to snap OCR noise (1970→2000). Not mark-specific.
+# Edit if your project uses unusual grids — this does NOT assign lengths to marks.
 # ---------------------------------------------------------------------------
 STANDARD_PLAN_LENGTHS_MM: list[float] = [
     1000,
@@ -400,38 +401,12 @@ STANDARD_PLAN_LENGTHS_MM: list[float] = [
     6000,
 ]
 
-# Primary along-member length when OCR cannot confidently associate a dim.
-# Edit these to match your pipe-rack / building typical marks.
-# B3 is multi-length (1500 / 2000 / 6000) — handled by snapping, not a single default.
-DEFAULT_PLAN_BEAM_LENGTHS_MM: dict[str, float] = {
-    "B2": 6000,
-    "B4": 6000,
-    "B5": 2000,
-    "B6": 2000,
-    "B7": 2000,
-    "B8": 6000,
-}
-
-# Allowed lengths for marks that appear at more than one size on the plan.
-MULTI_LENGTH_BEAMS_MM: dict[str, list[float]] = {
-    "B3": [1500, 2000, 6000],
-}
-
-# When OCR cannot split multi-length marks, use this qty distribution
-# (must sum to the mark's typical count on the reference pipe-rack plan).
-# Edit ratios for your project — values are relative weights, scaled to actual qty.
-MULTI_LENGTH_BEAM_WEIGHTS: dict[str, dict[float, int]] = {
-    "B3": {1500: 4, 2000: 8, 6000: 2},  # reference: 14 B3 on plan
-}
-
-# Diagonal brace bay legs (a, b) → L = √(a²+b²). Edit per typical brace bay.
-# From the pipe-rack plan callouts (user-verified):
-#   BR1 spans 3000 (horizontal) × 1500 (vertical) → √(3000²+1500²) = 3354.10
-#   BR4 spans 1000 (horizontal) × 2000 (vertical) → √(1000²+2000²) = 2236.07
-DEFAULT_PLAN_BRACE_LEGS_MM: dict[str, tuple[float, float]] = {
-    "BR1": (3000.0, 1500.0),
-    "BR4": (1000.0, 2000.0),
-}
+# Optional overrides — KEEP EMPTY. Lengths must be read from each drawing.
+# Do NOT hardcode BR1/BR4/B7 sizes here; the next drawing will differ.
+DEFAULT_PLAN_BEAM_LENGTHS_MM: dict[str, float] = {}
+MULTI_LENGTH_BEAMS_MM: dict[str, list[float]] = {}
+MULTI_LENGTH_BEAM_WEIGHTS: dict[str, dict[float, int]] = {}
+DEFAULT_PLAN_BRACE_LEGS_MM: dict[str, tuple[float, float]] = {}
 
 # Explicit base / top elevation phrases on column schedules
 BASE_ELEV_RE = re.compile(
@@ -1229,78 +1204,127 @@ def diagonal_length_from_bay(
     text_window: str = "",
 ) -> tuple[Optional[float], str]:
     """
-    For diagonally placed members (bracings / sloping beams):
+    Read THIS drawing's bay legs next to a brace mark, then:
       L = √(a² + b²)
 
-    a = nearest horizontal bay dimension, b = nearest vertical bay dimension.
-    Also accepts explicit pairs in nearby text: '3000x2000'.
+    a = nearest *horizontal* dimension string for that bay
+    b = nearest *vertical* dimension string for that bay
+
+    No hardcoded BR1/BR4 sizes — each drawing's dims are used.
+    If one orientation is only labeled at the sheet edge (common on plans),
+    search farther along that axis while staying in the brace's bay column/row.
     """
-    # 1) Explicit bay pair in text near the mark
+    # 1) Explicit bay pair in text near the mark (e.g. 3000x1500)
     pair = BAY_PAIR_RE.search(text_window or "")
     if pair:
         a, b = float(pair.group(1)), float(pair.group(2))
-        # Ignore plate-like triples already handled elsewhere (e.g. 600x600)
-        if a >= 200 and b >= 200:
+        if min(a, b) >= 50 and max(a, b) <= 30000:
             return triangle_diagonal_length(a, b), f"√({a}²+{b}²) from text pair"
 
     if not dims:
         return None, ""
 
-    mx, my = brace_item["cx"], brace_item["cy"]
+    mx, my = float(brace_item["cx"]), float(brace_item["cy"])
 
-    # Split dims into likely horizontal-string vs vertical-string values
-    horiz: list[tuple[float, dict]] = []
-    vert: list[tuple[float, dict]] = []
-    for d in dims:
-        dx = abs(d["cx"] - mx)
-        dy = abs(d["cy"] - my)
-        dist = float(np.hypot(dx, dy))
-        if dist < 10 or dist > 500:
-            continue
-        # Horizontal dimension strings sit above/below the bay (similar Y band offset)
-        # Vertical dimension strings sit left/right (similar X band offset)
-        h_score = dist + dx * 0.5  # prefer closer in Y for horizontal dims
-        v_score = dist + dy * 0.5
-        if d.get("orientation") == "horizontal":
-            h_score -= 30
-        if d.get("orientation") == "vertical":
-            v_score -= 30
-        # Dims nearly aligned horizontally with brace center → vertical dim line
-        if dx < 90:
-            vert.append((v_score, d))
-        if dy < 90:
-            horiz.append((h_score, d))
-        # Also keep general nearest pools
-        if dy <= dx:
-            horiz.append((h_score + 20, d))
-        else:
-            vert.append((v_score + 20, d))
+    def _ok(v: Any) -> bool:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return False
+        return 50 <= f <= 30000
+
+    def _collect(max_dist: float, x_band: float, y_band: float) -> tuple[list, list]:
+        horiz: list[tuple[float, float]] = []
+        vert: list[tuple[float, float]] = []
+        for d in dims:
+            if not _ok(d.get("value_mm")):
+                continue
+            val = float(d["value_mm"])
+            dx = abs(float(d["cx"]) - mx)
+            dy = abs(float(d["cy"]) - my)
+            dist = float(np.hypot(dx, dy))
+            if dist < 5 or dist > max_dist:
+                continue
+            orient = (d.get("orientation") or "unknown").lower()
+
+            # Horizontal dim strings: prefer same row-band (small dy) OR labeled
+            # as horizontal anywhere in the brace's X column
+            if orient == "horizontal" or (orient == "unknown" and dy <= dx):
+                if dy <= y_band or orient == "horizontal":
+                    score = dist + dy * 2.0
+                    if orient == "horizontal":
+                        score -= 50
+                    if dy < 100:
+                        score -= 30
+                    # Prefer local bay sizes over full-grid totals when both near
+                    if val >= 4500:
+                        score += 40
+                    horiz.append((score, val))
+
+            # Vertical dim strings: prefer same column-band (small dx)
+            if orient == "vertical" or (orient == "unknown" and dx <= dy):
+                if dx <= x_band or orient == "vertical":
+                    score = dist + dx * 2.0
+                    if orient == "vertical":
+                        score -= 50
+                    if dx < 100:
+                        score -= 30
+                    if val >= 4500:
+                        score += 40
+                    vert.append((score, val))
+        return horiz, vert
+
+    # Pass 1: local neighborhood
+    horiz, vert = _collect(max_dist=380, x_band=120, y_band=120)
+
+    # Pass 2: if missing an orientation, search sheet-edge dims in the same bay column/row
+    if not horiz or not vert:
+        h2, v2 = _collect(max_dist=900, x_band=220, y_band=220)
+        if not horiz:
+            horiz = h2
+        if not vert:
+            vert = v2
 
     if not horiz or not vert:
-        # Fallback: two nearest distinct dim values as a,b
-        ordered = sorted(dims, key=lambda d: float(np.hypot(d["cx"] - mx, d["cy"] - my)))
-        vals = []
-        for d in ordered:
-            v = d.get("value_mm")
-            if v and v not in vals:
-                vals.append(v)
-            if len(vals) >= 2:
-                break
-        if len(vals) >= 2:
-            a, b = vals[0], vals[1]
-            return triangle_diagonal_length(a, b), f"√({a}²+{b}²) nearest dims"
         return None, ""
 
     horiz.sort(key=lambda t: t[0])
     vert.sort(key=lambda t: t[0])
-    a = horiz[0][1]["value_mm"]
-    b = vert[0][1]["value_mm"]
-    # Avoid using the same physical dim twice when pools overlap
-    if a == b and len(horiz) > 1:
-        a = horiz[1][1]["value_mm"]
-    if a == b and len(vert) > 1:
-        b = vert[1][1]["value_mm"]
-    return triangle_diagonal_length(a, b), f"√({a}²+{b}²)"
+
+    a = horiz[0][1]
+    b = vert[0][1]
+
+    # Prefer distinct leg values
+    if abs(a - b) < 1e-6:
+        for _, v in horiz[1:]:
+            if abs(v - b) > 1e-6:
+                a = v
+                break
+        else:
+            for _, v in vert[1:]:
+                if abs(v - a) > 1e-6:
+                    b = v
+                    break
+
+    # Prefer smaller local bay over a slightly-farther grid total (6000)
+    def _prefer_local(pool: list[tuple[float, float]], chosen: float) -> float:
+        best_score = pool[0][0]
+        locals_ = [
+            (s, v)
+            for s, v in pool
+            if v < chosen and v >= 50 and s <= best_score * 2.2
+        ]
+        if not locals_:
+            return chosen
+        locals_.sort(key=lambda t: (t[0], t[1]))
+        return locals_[0][1]
+
+    if a >= 4500:
+        a = _prefer_local(horiz, a)
+    if b >= 4500:
+        b = _prefer_local(vert, b)
+
+    return triangle_diagonal_length(a, b), f"√({a}²+{b}²) from nearby H×V dims"
 
 
 
@@ -1368,38 +1392,33 @@ def sanitize_member_lengths(
     columns: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """
-    Fabrication-safe length cleanup:
-    - Single-primary marks (B4/B6/B7/B8…) → force known plan length (OCR splits are noisy)
-    - Multi-length marks (B3) → keep only 1500 / 2000 / 6000
-    - Column heights: keep only explicit standard sizes; else N/A (no title-block deltas)
-    - Brace diagonals: keep √(a²+b²) results; otherwise apply default legs
+    Fabrication-safe cleanup — NO project-specific hardcodes.
+    - Snap OCR noise to nearby standard bay sizes when close (1970→2000)
+    - Keep diagonal √(a²+b²) results read from THIS drawing's dims
+    - Reject invented values; use blank/N/A instead of guessing
+    - Optional empty override maps may fill gaps only if the user filled them
     """
     clean_beams: list[dict[str, Any]] = []
     for row in beams:
         r = dict(row)
         mark = str(r.get("Mark") or "").upper()
         raw = r.get("Length (mm)")
-        allowed = MULTI_LENGTH_BEAMS_MM.get(mark)
-
-        # Single-primary marks: always use the known along-member length.
-        # OCR frequently assigns the wrong parallel dim (B4→2000, B8→2000).
-        if mark in DEFAULT_PLAN_BEAM_LENGTHS_MM and not allowed:
-            r["Length (mm)"] = DEFAULT_PLAN_BEAM_LENGTHS_MM[mark]
-            r["Length Method"] = "known-plan-default"
-            clean_beams.append(r)
-            continue
+        allowed = MULTI_LENGTH_BEAMS_MM.get(mark) or None
 
         snapped = _snap_to_standard(raw, allowed) if raw not in ("", None, "N/A") else None
         if snapped is not None:
             r["Length (mm)"] = snapped
-        elif allowed:
-            r["Length (mm)"] = ""
-            r["Length Method"] = "unreadable"
+        elif mark in DEFAULT_PLAN_BEAM_LENGTHS_MM and raw in ("", None, "N/A"):
+            r["Length (mm)"] = DEFAULT_PLAN_BEAM_LENGTHS_MM[mark]
+            r["Length Method"] = "optional-override"
         elif raw in ("", None, "N/A"):
             r["Length (mm)"] = ""
         else:
-            r["Length (mm)"] = ""
-            r["Length Method"] = "rejected-nonstandard"
+            try:
+                v = float(raw)
+                r["Length (mm)"] = round(v, 2) if 50 <= v <= 30000 else ""
+            except (TypeError, ValueError):
+                r["Length (mm)"] = ""
         clean_beams.append(r)
 
     clean_braces: list[dict[str, Any]] = []
@@ -1408,30 +1427,30 @@ def sanitize_member_lengths(
         mark = str(r.get("Mark") or "").upper()
         raw = r.get("Length (mm)")
         method = str(r.get("Length Method") or "")
-        is_diag = "√" in method or "sqrt" in method.lower() or method.startswith("diag")
+        is_diag = (
+            "√" in method
+            or "sqrt" in method.lower()
+            or "H×V" in method
+            or "nearby" in method.lower()
+        )
         try:
             raw_f = float(raw) if raw not in ("", None, "N/A") else None
         except (TypeError, ValueError):
             raw_f = None
 
-        # Known brace marks: ALWAYS use verified bay legs (ignore OCR mis-pairs).
-        # BR1 = √(3000²+1500²), BR4 = √(1000²+2000²) — edit DEFAULT_PLAN_BRACE_LEGS_MM.
-        if mark in DEFAULT_PLAN_BRACE_LEGS_MM:
+        # Prefer length already computed from THIS drawing's nearby H×V dims
+        if is_diag and raw_f is not None and 50 <= raw_f <= 30000:
+            r["Length (mm)"] = round(raw_f, 2)
+        elif raw_f is not None and 50 <= raw_f <= 30000:
+            snapped = _snap_to_standard(raw_f)
+            r["Length (mm)"] = snapped if snapped is not None else round(raw_f, 2)
+        elif mark in DEFAULT_PLAN_BRACE_LEGS_MM:
             a, b = DEFAULT_PLAN_BRACE_LEGS_MM[mark]
             r["Length (mm)"] = round(triangle_diagonal_length(a, b), 2)
-            r["Length Method"] = f"√({int(a)}²+{int(b)}²) known-bay"
-            clean_braces.append(r)
-            continue
-
-        if is_diag and raw_f is not None and 500 <= raw_f <= 20000:
-            r["Length (mm)"] = round(raw_f, 2)
-        elif raw_f is not None and _is_standard_length(raw_f):
-            r["Length (mm)"] = _snap_to_standard(raw_f)
+            r["Length Method"] = f"√({int(a)}²+{int(b)}²) optional-override"
         else:
-            if raw_f is not None and 2000 <= raw_f <= 15000 and not _is_standard_length(raw_f):
-                r["Length (mm)"] = round(raw_f, 2)
-            else:
-                r["Length (mm)"] = ""
+            r["Length (mm)"] = ""
+            if not method:
                 r["Length Method"] = "unreadable"
         clean_braces.append(r)
 
@@ -1439,12 +1458,20 @@ def sanitize_member_lengths(
     for row in columns:
         r = dict(row)
         raw = r.get("Height (mm)")
-        # Do NOT invent height from page title elevations (100.3→109 = 8700).
         height = None
         if raw not in ("", None, "N/A"):
-            snapped = _snap_to_standard(raw)
-            if snapped is not None:
-                height = snapped
+            try:
+                v = float(raw)
+                if 50 <= v <= 30000:
+                    # Columns: only keep if it snaps to a real bay size OR
+                    # looks like an explicit schedule height (round hundreds)
+                    snapped = _snap_to_standard(v)
+                    if snapped is not None:
+                        height = snapped
+                    elif abs(v - round(v / 50.0) * 50.0) < 0.5 and 500 <= v <= 20000:
+                        height = round(v, 2)
+            except (TypeError, ValueError):
+                height = None
         r["Height (mm)"] = height if height is not None else ""
         for key in ("Base Elevation", "Top Elevation"):
             try:
@@ -1465,9 +1492,10 @@ def expand_rows_to_mark_quantities(
 ) -> list[dict[str, Any]]:
     """
     Rebuild instance rows so Quantity matches how many times the mark appears
-    on the drawing (word-layer count), not OCR-invented instance counts.
+    on the drawing (word-layer count).
 
-    Example: B7 appears 76 times → 76 rows of B7@2000.
+    Lengths come from what was read on THIS drawing (geometry / OCR / AI).
+    No hardcoded BR1/BR4/B7 sizes — next drawing may differ.
     """
     if not mark_counts:
         return rows
@@ -1485,7 +1513,7 @@ def expand_rows_to_mark_quantities(
         if existing:
             template = dict(existing[0])
 
-        # Multi-length reference split (B3 → 4×1500 + 8×2000 + 2×6000 scaled)
+        # Optional multi-length weight hint (empty by default)
         ref_weights = MULTI_LENGTH_BEAM_WEIGHTS.get(mark)
         if ref_weights:
             weight_sum = sum(ref_weights.values()) or 1
@@ -1512,32 +1540,7 @@ def expand_rows_to_mark_quantities(
                     idx += 1
             continue
 
-        # Single-primary beam marks → force known length × full quantity
-        if mark in DEFAULT_PLAN_BEAM_LENGTHS_MM and mark not in MULTI_LENGTH_BEAMS_MM:
-            L = _format_length_display(DEFAULT_PLAN_BEAM_LENGTHS_MM[mark])
-            for i in range(total_qty):
-                row = dict(template)
-                row["Mark"] = mark
-                row[length_key] = L
-                row["_instance"] = f"qty-{mark}-{i}"
-                out.append(row)
-            continue
-
-        # Known diagonal braces → force √(a²+b²) × full quantity
-        # BR1 = √(3000²+1500²)=3354.10, BR4 = √(1000²+2000²)=2236.07
-        if mark in DEFAULT_PLAN_BRACE_LEGS_MM and length_key == "Length (mm)":
-            a, b = DEFAULT_PLAN_BRACE_LEGS_MM[mark]
-            L = _format_length_display(round(triangle_diagonal_length(a, b), 2))
-            for i in range(total_qty):
-                row = dict(template)
-                row["Mark"] = mark
-                row[length_key] = L
-                row["Length Method"] = f"√({int(a)}²+{int(b)}²) known-bay"
-                row["_instance"] = f"qty-{mark}-{i}"
-                out.append(row)
-            continue
-
-        # Preserve observed length distribution (other bracing diagonals, etc.)
+        # Preserve observed length distribution from the drawing
         length_counter: Counter = Counter()
         for r in existing:
             L = r.get(length_key)
@@ -1574,6 +1577,15 @@ def expand_rows_to_mark_quantities(
         L = known[0][0] if known else "UNKNOWN"
         if L == "UNKNOWN" and mark in DEFAULT_PLAN_BEAM_LENGTHS_MM:
             L = _format_length_display(DEFAULT_PLAN_BEAM_LENGTHS_MM[mark])
+        if (
+            L == "UNKNOWN"
+            and mark in DEFAULT_PLAN_BRACE_LEGS_MM
+            and length_key == "Length (mm)"
+        ):
+            a, b = DEFAULT_PLAN_BRACE_LEGS_MM[mark]
+            L = _format_length_display(round(triangle_diagonal_length(a, b), 2))
+            template["Length Method"] = f"√({int(a)}²+{int(b)}²) optional-override"
+
         for i in range(total_qty):
             row = dict(template)
             row["Mark"] = mark
@@ -2109,7 +2121,8 @@ def extract_bracings_regex(
         pair = BAY_PAIR_RE.search(window)
         if pair:
             a, b = float(pair.group(1)), float(pair.group(2))
-            if a >= 200 and b >= 200:
+            # Allow narrow bays (e.g. 1000 × 2000) — do not hardcode mark sizes
+            if min(a, b) >= 50 and max(a, b) <= 30000:
                 length = triangle_diagonal_length(a, b)
                 method = f"√({a}²+{b}²) from text pair"
         if length is None:
@@ -2159,26 +2172,34 @@ def extract_bracings_regex(
 #   BASE PLATES: Mark | Plate_Size_mm | Weight
 #
 
+
 AI_SYSTEM_PROMPT = """You are a Senior Steel Structure Detailer and BIM Modeler with 15 years experience.
 
-TASK: Read this steel structure drawing PDF text and extract all data into tables.
+TASK: LOOK at the steel structure drawing IMAGE (and any OCR text) and extract fabrication data.
+You MUST read dimension callouts VISUALLY from the drawing — do not invent sizes from memory
+or from another project. Every length must come from THIS sheet.
 
 EXTRACT EXACTLY THESE 4 TABLES:
 
 1. BEAMS
 BEAMS: Mark | Length_mm | Quantity
-Rule: Find all BEAMS. Read the Length of each beam. Quantity = how many times that mark
-appears at that same length (count occurrences on the sheet / schedule).
+Rule: Find all BEAMS (B1, B2, …). Read the Length written in the SAME DIRECTION as the beam.
+Quantity = how many times that mark appears at that same length.
 
 2. COLUMNS
 COLUMNS: Mark | Height_mm | Quantity
-Rule: Find all COLUMNS. Read the Height of each column. Quantity = how many times that
-mark appears at that same height.
+Rule: Find all COLUMNS (C1, SC1, MC, …). Read Height from schedule or elevation dims.
+Quantity = how many times that mark appears at that same height.
 
-3. BRACING
-BRACING: Mark | Length_mm | Quantity
-Rule: Find all BRACING (BR*, BRG*). Length from schedule or √(a²+b²) for diagonals.
-Quantity = how many times that mark appears at that same length.
+3. BRACING (CRITICAL — use VISION)
+BRACING: Mark | Length_mm | Quantity | bay_a_mm | bay_b_mm
+Rule: Find each BR* / BRG* mark on the IMAGE.
+For DIAGONAL braces:
+  - Read the horizontal bay dimension NEXT TO that brace (bay_a_mm)
+  - Read the vertical bay dimension NEXT TO that brace (bay_b_mm)
+  - Length_mm = sqrt(bay_a_mm^2 + bay_b_mm^2)
+  - Different BR marks may have DIFFERENT bay legs — read each from THIS drawing.
+Quantity = how many times that mark appears at that same computed length.
 
 4. BASE PLATES
 BASE PLATES: Mark | Plate_Size_mm | Weight
@@ -2192,7 +2213,7 @@ Return ONLY valid JSON (no markdown fences, no CSV, no commentary) with this sha
 {
   "beams": [{"mark":"B1","length_mm":6000,"quantity":4,"section_size":"","material":"","start_el":"","end_el":""}],
   "columns": [{"mark":"C1","height_mm":5700,"quantity":2,"section_size":"","base_elevation":"","top_elevation":"","material":""}],
-  "bracings": [{"mark":"BR1","length_mm":3606,"quantity":2,"section_size":"","length_method":"sqrt(a^2+b^2)"}],
+  "bracings": [{"mark":"BR1","length_mm":3354.1,"quantity":2,"bay_a_mm":3000,"bay_b_mm":1500,"section_size":"","length_method":"sqrt(3000^2+1500^2)"}],
   "base_plates": [{"mark":"BP1","plate_size":"500x500x25","weight_kg":48,"thickness_mm":"","anchor_bolt_dia":"","anchor_bolt_qty":"","top_of_concrete_el":""}],
   "summary": {
     "total_beams": 0,
@@ -2205,58 +2226,17 @@ Return ONLY valid JSON (no markdown fences, no CSV, no commentary) with this sha
 }
 
 IMPORTANT RULES:
-1. If you can't read a value, write "N/A" — do NOT guess. Fabrication accuracy is critical.
-2. Look in General Notes, Beam Schedules, Column Schedules, Detail callouts, and plan/elevation marks.
+1. If you can't READ a value on THIS drawing, write "N/A" — do NOT guess.
+2. Look at dimension strings drawn on the plan/elevation IMAGE, plus schedules/notes.
 3. Be 100% accurate. This is for fabrication.
 4. Use marks exactly as on the drawing (B1, C3, BP2, BR1, SC1, MC, CT1).
 5. Lengths/heights in millimetres (convert metres ×1000; cm ×10).
 6. PLAN LENGTH RULE: the dimension is written in the SAME DIRECTION as the beam.
-   Vertical beams use the vertical dimension beside them; horizontal beams use the
-   horizontal dimension. Same mark at different lengths → separate rows.
-7. DIAGONAL RULE: for diagonal bracing/beams, L = sqrt(a^2 + b^2) from bay spans.
-   Known pipe-rack braces: BR1 = sqrt(3000^2 + 1500^2) = 3354.10 mm;
-   BR4 = sqrt(1000^2 + 2000^2) = 2236.07 mm.
-8. Quantity must be an integer count of occurrences (not a guess of shipping qty).
+7. DIAGONAL RULE: always compute L = sqrt(a^2 + b^2) from the bay legs you see
+   beside THAT brace on THIS image. Fill bay_a_mm and bay_b_mm.
+8. Quantity must be an integer count of occurrences on the sheet.
 9. Return ONLY valid JSON.
 """
-
-
-def _na(value: Any) -> Any:
-    """Normalize blank / N/A placeholders."""
-    if value is None:
-        return "N/A"
-    s = str(value).strip()
-    if not s or s.lower() in {"none", "null", "unknown", "-"}:
-        return "N/A"
-    return value if not isinstance(value, str) else s
-
-
-def _expand_quantity_rows(
-    rows: list[dict[str, Any]],
-    length_key: str,
-) -> list[dict[str, Any]]:
-    """
-    Expand AI rows that include an explicit Quantity into N instance rows
-    so regex-style counting (_count_by_mark_and_length) stays consistent.
-    """
-    expanded: list[dict[str, Any]] = []
-    for row in rows:
-        qty_raw = row.get("Quantity", row.get("quantity", 1))
-        try:
-            qty = int(float(qty_raw))
-        except (TypeError, ValueError):
-            qty = 1
-        qty = max(1, qty)
-        for i in range(qty):
-            clone = dict(row)
-            clone.pop("Quantity", None)
-            clone.pop("quantity", None)
-            clone["_instance"] = f"ai-{i}"
-            # Keep length/height as-is for grouping
-            if length_key in clone and clone[length_key] in ("", None, "N/A"):
-                clone[length_key] = ""
-            expanded.append(clone)
-    return expanded
 
 
 def _ai_console(msg: str = "", *, flush: bool = True) -> None:
@@ -2270,7 +2250,6 @@ def _ai_content_to_text(content: Any) -> str:
         return ""
     if isinstance(content, str):
         return content
-    # Gemini / some LangChain wrappers return a list of content blocks
     if isinstance(content, list):
         parts: list[str] = []
         for block in content:
@@ -2301,12 +2280,177 @@ def _print_ai_raw(title: str, content: str) -> None:
     _ai_console("")
 
 
+def _na(value: Any) -> Any:
+    """Normalize blank / N/A placeholders."""
+    if value is None:
+        return "N/A"
+    s = str(value).strip()
+    if not s or s.lower() in {"none", "null", "unknown", "-"}:
+        return "N/A"
+    return value if not isinstance(value, str) else s
+
+
+def _expand_quantity_rows(
+    rows: list[dict[str, Any]],
+    length_key: str,
+) -> list[dict[str, Any]]:
+    """Expand AI rows with Quantity into N instance rows for counting."""
+    expanded: list[dict[str, Any]] = []
+    for row in rows:
+        qty_raw = row.get("Quantity", row.get("quantity", 1))
+        try:
+            qty = int(float(qty_raw))
+        except (TypeError, ValueError):
+            qty = 1
+        qty = max(1, qty)
+        for i in range(qty):
+            clone = dict(row)
+            clone.pop("Quantity", None)
+            clone.pop("quantity", None)
+            clone["_instance"] = f"ai-{i}"
+            if length_key in clone and clone[length_key] in ("", None, "N/A"):
+                clone[length_key] = ""
+            expanded.append(clone)
+    return expanded
+
+
+def render_page_image_base64(
+    page: pdfplumber.page.Page,
+    dpi: int = 140,
+    max_side: int = 2048,
+) -> Optional[str]:
+    """
+    Render a PDF page to JPEG (base64) for Gemini / OpenAI vision.
+    Downscales if larger than max_side to keep API payloads reasonable.
+    """
+    try:
+        from PIL import Image
+
+        pil = page.to_image(resolution=dpi).original
+        if not isinstance(pil, Image.Image):
+            pil = Image.fromarray(np.array(pil))
+        w, h = pil.size
+        scale = min(1.0, float(max_side) / float(max(w, h)))
+        if scale < 1.0:
+            pil = pil.resize(
+                (max(1, int(w * scale)), max(1, int(h * scale))),
+                Image.Resampling.LANCZOS,
+            )
+        if pil.mode not in ("RGB", "L"):
+            pil = pil.convert("RGB")
+        buf = io.BytesIO()
+        pil.save(buf, format="JPEG", quality=85, optimize=True)
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception as exc:  # noqa: BLE001
+        _ai_console(f"[AI vision] page render failed: {exc}")
+        return None
+
+
+def _parse_ai_json_content(content: str) -> dict[str, Any]:
+    """Strip fences / prose and parse AI JSON."""
+    import json
+
+    cleaned = re.sub(r"^```(?:json)?\s*", "", content.strip())
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    if not cleaned.lstrip().startswith("{"):
+        match = re.search(r"\{[\s\S]*\}", cleaned)
+        if match:
+            cleaned = match.group(0)
+    return json.loads(cleaned)
+
+
+def ai_extract_from_page(
+    page: pdfplumber.page.Page,
+    text: str,
+    page_no: int,
+) -> dict[str, list[dict]]:
+    """
+    Vision + text extraction via Gemini (preferred) or OpenAI.
+    Sends a rendered page IMAGE so the model can READ bay dimensions
+    (e.g. BR1 beside 3000×1500) instead of hardcoding project sizes.
+    Prints the full raw AI response to the uvicorn console.
+    """
+    empty = {"beams": [], "columns": [], "base_plates": [], "bracings": [], "summary": {}}
+    llm, provider, model_name = _get_chat_llm(temperature=0)
+    if llm is None:
+        st = _ai_provider_status()
+        _ai_console(
+            f"[AI vision] SKIPPED page {page_no} — No AI key — set GEMINI_API_KEY "
+            f"(preferred) or OPENAI_API_KEY in {st['gemini']['root_env']}"
+        )
+        return empty
+
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+        import json
+
+        image_b64 = render_page_image_base64(page)
+        clipped = (text or "")[:8000]
+        _ai_console("")
+        _ai_console("=" * 72)
+        _ai_console(
+            f"[AI vision] CALLING provider={provider} model={model_name} "
+            f"page={page_no} text_chars={len(clipped)} "
+            f"image={'yes' if image_b64 else 'NO'}"
+        )
+        _ai_console("=" * 72)
+
+        user_text = (
+            f"Page {page_no} steel structure drawing.\n"
+            "Look at the IMAGE carefully. Read dimension callouts next to each "
+            "beam / brace / column mark. For diagonal BR* members, read bay_a_mm "
+            "(horizontal) and bay_b_mm (vertical) beside THAT mark, then set "
+            "length_mm = sqrt(bay_a_mm^2 + bay_b_mm^2).\n"
+            "Do not reuse sizes from another drawing. If unreadable, use N/A.\n\n"
+            f"OCR / digital text (may be incomplete — prefer the IMAGE):\n{clipped}\n\n"
+            "Return JSON only."
+        )
+
+        if image_b64:
+            human = HumanMessage(
+                content=[
+                    {"type": "text", "text": user_text},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
+                    },
+                ]
+            )
+        else:
+            human = HumanMessage(content=user_text)
+
+        resp = llm.invoke([SystemMessage(content=AI_SYSTEM_PROMPT), human])
+        content = _ai_content_to_text(getattr(resp, "content", resp))
+        _print_ai_raw(f"AI VISION RAW RESPONSE — page {page_no}", content)
+
+        data = _parse_ai_json_content(content)
+        parsed = {
+            "beams": data.get("beams") or [],
+            "columns": data.get("columns") or [],
+            "base_plates": data.get("base_plates") or data.get("basePlates") or [],
+            "bracings": data.get("bracings") or data.get("bracing") or [],
+            "summary": data.get("summary") or {},
+        }
+        _ai_console(
+            f"[AI vision] PARSED page {page_no}: "
+            f"beams={len(parsed['beams'])} columns={len(parsed['columns'])} "
+            f"base_plates={len(parsed['base_plates'])} bracings={len(parsed['bracings'])}"
+        )
+        _print_ai_raw(
+            f"AI VISION PARSED JSON — page {page_no}",
+            json.dumps(parsed, indent=2, default=str),
+        )
+        return parsed
+    except Exception as exc:  # noqa: BLE001
+        _ai_console(f"[AI vision] ERROR page {page_no}: {exc}")
+        import traceback
+
+        _ai_console(traceback.format_exc())
+        return empty
+
+
 def ai_extract_from_text(text: str, page_no: int) -> dict[str, list[dict]]:
-    """
-    Call Gemini (preferred) or OpenAI via LangChain to enrich extraction.
-    Returns empty lists if no API key or on failure — regex results still apply.
-    ALWAYS prints the raw AI response to the console (uvicorn terminal).
-    """
+    """Text-only fallback when no page image is available."""
     empty = {"beams": [], "columns": [], "base_plates": [], "bracings": [], "summary": {}}
     llm, provider, model_name = _get_chat_llm(temperature=0)
     if llm is None or not text.strip():
@@ -2324,13 +2468,12 @@ def ai_extract_from_text(text: str, page_no: int) -> dict[str, list[dict]]:
         from langchain_core.messages import HumanMessage, SystemMessage
         import json
 
-        # Cap text to keep token usage reasonable on huge sheets
         clipped = text[:14000]
         _ai_console("")
         _ai_console("=" * 72)
         _ai_console(
             f"[AI extract] CALLING provider={provider} model={model_name} "
-            f"page={page_no} chars={len(clipped)}"
+            f"page={page_no} chars={len(clipped)} (text-only, no vision)"
         )
         _ai_console("=" * 72)
         resp = llm.invoke(
@@ -2345,20 +2488,8 @@ def ai_extract_from_text(text: str, page_no: int) -> dict[str, list[dict]]:
             ]
         )
         content = _ai_content_to_text(getattr(resp, "content", resp))
-
-        # --- Console dump: full raw AI return (what you asked to see) ---
         _print_ai_raw(f"AI RAW RESPONSE — page {page_no}", content)
-
-        # Strip optional ```json fences
-        cleaned = re.sub(r"^```(?:json)?\s*", "", content.strip())
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-        # Some models wrap JSON in prose — grab the outermost object
-        if not cleaned.lstrip().startswith("{"):
-            match = re.search(r"\{[\s\S]*\}", cleaned)
-            if match:
-                cleaned = match.group(0)
-
-        data = json.loads(cleaned)
+        data = _parse_ai_json_content(content)
         parsed = {
             "beams": data.get("beams") or [],
             "columns": data.get("columns") or [],
@@ -2366,11 +2497,6 @@ def ai_extract_from_text(text: str, page_no: int) -> dict[str, list[dict]]:
             "bracings": data.get("bracings") or data.get("bracing") or [],
             "summary": data.get("summary") or {},
         }
-        _ai_console(
-            f"[AI extract] PARSED page {page_no}: "
-            f"beams={len(parsed['beams'])} columns={len(parsed['columns'])} "
-            f"base_plates={len(parsed['base_plates'])} bracings={len(parsed['bracings'])}"
-        )
         _print_ai_raw(
             f"AI PARSED JSON — page {page_no}",
             json.dumps(parsed, indent=2, default=str),
@@ -2458,6 +2584,11 @@ def _merge_ai_base_plates(ai_rows: list[dict], page_no: int) -> list[dict[str, A
 
 
 def _merge_ai_bracings(ai_rows: list[dict], page_no: int) -> list[dict[str, Any]]:
+    """
+    Merge AI/vision bracing rows. Prefer length from bay_a × bay_b when the
+    model read both legs from the drawing image:
+      L = √(bay_a² + bay_b²)
+    """
     out = []
     for r in ai_rows:
         mark = str(r.get("mark") or "").upper().replace(" ", "")
@@ -2465,13 +2596,30 @@ def _merge_ai_bracings(ai_rows: list[dict], page_no: int) -> list[dict[str, Any]
             continue
         if not mark.startswith("BR"):
             mark = f"BR{mark}"
+
+        bay_a = r.get("bay_a_mm")
+        bay_b = r.get("bay_b_mm")
         length = r.get("length_mm") if r.get("length_mm") not in (None, "", "N/A") else ""
+        method = str(r.get("length_method") or "")
+
+        try:
+            a = float(bay_a) if bay_a not in (None, "", "N/A") else None
+            b = float(bay_b) if bay_b not in (None, "", "N/A") else None
+        except (TypeError, ValueError):
+            a = b = None
+
+        if a is not None and b is not None and min(a, b) >= 50 and max(a, b) <= 30000:
+            length = round(triangle_diagonal_length(a, b), 2)
+            method = f"√({a}²+{b}²) from AI vision bay legs"
+
         qty = r.get("quantity", 1)
         row = {
             "Mark": mark,
             "Section Size": _normalize_section(str(r.get("section_size") or "")) or "N/A",
             "Length (mm)": length if length != "N/A" else "",
-            "Length Method": _na(r.get("length_method")),
+            "Length Method": method or _na(r.get("length_method")),
+            "Bay A (mm)": a if a is not None else "N/A",
+            "Bay B (mm)": b if b is not None else "N/A",
             "Quantity": qty,
             "Page": page_no,
         }
@@ -2651,15 +2799,46 @@ def process_pdf(
                 )
                 base_plates.extend(extract_base_plates_regex(text, page_no))
 
-            # AI enrichment pass (optional)
-            ai = ai_extract_from_text(text, page_no)
+            # AI vision enrichment — reads bay dims from the page IMAGE
+            ai = ai_extract_from_page(page, text, page_no)
             if page_no in plan_set:
                 beams.extend(_merge_ai_beams(ai["beams"], page_no))
-                bracings.extend(_merge_ai_bracings(ai["bracings"], page_no))
+                ai_braces = _merge_ai_bracings(ai["bracings"], page_no)
+                # Prefer vision braces that include bay_a × bay_b over OCR geometry guesses
+                vision_marks = {
+                    str(r.get("Mark") or "").upper()
+                    for r in ai_braces
+                    if r.get("Bay A (mm)") not in ("", None, "N/A")
+                    and r.get("Bay B (mm)") not in ("", None, "N/A")
+                }
+                if vision_marks:
+                    bracings = [
+                        r
+                        for r in bracings
+                        if str(r.get("Mark") or "").upper() not in vision_marks
+                        or r.get("Page") != page_no
+                    ]
+                bracings.extend(ai_braces)
                 base_plates.extend(_merge_ai_base_plates(ai["base_plates"], page_no))
             if page_no in elev_set:
                 columns.extend(_merge_ai_columns(ai["columns"], page_no))
                 base_plates.extend(_merge_ai_base_plates(ai["base_plates"], page_no))
+                # Elevation sheets can also have bracing — prefer vision when present
+                ai_braces = _merge_ai_bracings(ai["bracings"], page_no)
+                vision_marks = {
+                    str(r.get("Mark") or "").upper()
+                    for r in ai_braces
+                    if r.get("Bay A (mm)") not in ("", None, "N/A")
+                    and r.get("Bay B (mm)") not in ("", None, "N/A")
+                }
+                if vision_marks:
+                    bracings = [
+                        r
+                        for r in bracings
+                        if str(r.get("Mark") or "").upper() not in vision_marks
+                        or r.get("Page") != page_no
+                    ]
+                bracings.extend(ai_braces)
 
             # Free page resources promptly
             del page
