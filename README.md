@@ -112,6 +112,29 @@ Same extraction, streams the `.xlsx` file directly (for API clients).
 3. **BasePlates** — Mark, Plate Size, Thickness, Anchor bolts, TOC EL, Weight  
 4. **Summary** — Totals, min/max elevation, total beam length, material mix, and engineer counts such as “N columns of length L”, “N bracings of length L”, “N beams of length L”, “N base plates of weight W”
 
+## Length association (plan drawings)
+
+On plan views, member length is taken from the dimension written in the **same direction** as the member:
+
+| Mark | Direction | Length |
+|------|-----------|--------|
+| B3   | vertical dim beside beam | 1500 |
+| B8   | vertical dim (each instance) | 6000 |
+| B7   | vertical dim | 2000 |
+| B4   | horizontal dim | 6000 |
+
+**Diagonal members** (BR1, BR4, or any beam/column marked diagonal/sloping) use the triangle diagonal formula:
+
+```text
+L = √(a² + b²)
+```
+
+where `a` and `b` are the horizontal and vertical bay spans the member covers (e.g. 3000 × 2000 → 3605.55).
+
+Tune geometry helpers in `backend/main.py`:
+- `length_from_parallel_dimension()` — orthogonal beams
+- `triangle_diagonal_length()` / `diagonal_length_from_bay()` — braces
+
 ## Editing regex patterns
 
 Open `backend/main.py` and find the section marked:
@@ -121,6 +144,7 @@ Open `backend/main.py` and find the section marked:
 ```
 
 Tune `BEAM_MARK_RE`, `COLUMN_MARK_RE`, `SECTION_SIZE_RE`, `ELEVATION_RE`, etc. for your office standards (ISMB, W-shapes, UB/UC, etc.).
+
 
 ## UI flow
 

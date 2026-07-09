@@ -66,8 +66,9 @@ JOBS: dict[str, dict[str, Any]] = {}
 # =============================================================================
 #
 # Beam marks: B1, B-12, BM3, Beam 4, etc.
+# Negative lookbehind/ahead so BR1 / BP2 are NOT treated as beam marks.
 BEAM_MARK_RE = re.compile(
-    r"\b(?:B|BM|BEAM)[-\s]?(\d{1,4}[A-Z]?)\b",
+    r"(?<![A-Z])(?:B|BM|BEAM)[-\s]?(\d{1,4}[A-Z]?)\b",
     re.IGNORECASE,
 )
 
@@ -285,6 +286,20 @@ def extract_page_text(
 # Regex extraction (primary) — works without OpenAI
 # =============================================================================
 
+# Standalone plan dimension values (e.g. 1500, 2000, 3000, 6000).
+# Edit DIM_VALUE_RE if your sheets use different ranges / units.
+DIM_VALUE_RE = re.compile(
+    r"^(?P<val>\d{3,5}(?:\.\d+)?)(?:\s*(?:mm|cm|m))?$",
+    re.IGNORECASE,
+)
+
+# Explicit bay / span pairs sometimes written as 3000x2000 near a brace
+BAY_PAIR_RE = re.compile(
+    r"\b(\d{3,5}(?:\.\d+)?)\s*[x×]\s*(\d{3,5}(?:\.\d+)?)\b",
+    re.IGNORECASE,
+)
+
+
 def _normalize_section(raw: str) -> str:
     return re.sub(r"\s+", "", raw.upper().replace("×", "x"))
 
@@ -298,30 +313,168 @@ def _parse_length_mm(match: re.Match) -> Optional[float]:
     return None
 
 
+def _to_mm(value: float, unit_hint: str = "") -> float:
+    """
+    Normalize a raw dimension to millimetres.
+    Plan grids like 6000 / 1500 / 2000 are almost always mm on steel drawings.
+    Only convert when the unit is explicitly written.
+    """
+    u = (unit_hint or "").strip().lower()
+    if u in ("m", "meter", "metre", "meters", "metres"):
+        return value * 1000.0
+    if u in ("cm", "centimeter", "centimetre"):
+        return value * 10.0
+    return value  # default mm
+
+
+def triangle_diagonal_length(a: float, b: float) -> float:
+    """
+    Diagonal / bracing length from bay rectangle sides (Pythagoras):
+        L = √(a² + b²)
+    Example: bay 3000 × 2000 → √(3000² + 2000²) = 3605.55
+    """
+    return round(float(np.sqrt(a * a + b * b)), 2)
+
+
 def _nearby_window(text: str, start: int, end: int, radius: int = 180) -> str:
     """
-    Prefer the full line containing the mark (schedule-style drawings),
-    then fall back to a character window for free-floating callouts.
+    Prefer the mark's own line plus at most one adjacent line.
+    Avoid huge character windows on compact plan OCR dumps where every mark
+    would otherwise see the whole page (and pick up unrelated 'diagonal' notes).
     """
     line_start = text.rfind("\n", 0, start) + 1
     line_end = text.find("\n", end)
     if line_end == -1:
         line_end = len(text)
     line = text[line_start:line_end].strip()
-    # If the line is informative enough, use it (+ maybe next line for wrapped notes)
-    if len(line) >= 8:
-        next_end = text.find("\n", line_end + 1)
-        if next_end == -1:
-            next_end = min(len(text), line_end + 120)
-        nxt = text[line_end:next_end].strip()
-        # Only append next line if it looks like a continuation (no new mark)
-        if nxt and not BEAM_MARK_RE.search(nxt) and not COLUMN_MARK_RE.search(nxt):
-            if not BASE_PLATE_MARK_RE.search(nxt) and not BRACING_MARK_RE.search(nxt):
-                return f"{line} {nxt}"
-        return line
-    lo = max(0, start - radius)
-    hi = min(len(text), end + radius)
+
+    # Collect previous / next line for wrapped schedule notes
+    prev_start = text.rfind("\n", 0, max(0, line_start - 1)) + 1
+    prev_line = text[prev_start:line_start].strip() if line_start > 0 else ""
+    next_end = text.find("\n", line_end + 1)
+    if next_end == -1:
+        next_end = min(len(text), line_end + 80)
+    next_line = text[line_end:next_end].strip()
+
+    parts = [line]
+    # Only attach neighbour lines that do NOT introduce another member mark
+    def _is_other_mark_line(s: str) -> bool:
+        if not s:
+            return False
+        return bool(
+            BEAM_MARK_RE.search(s)
+            or COLUMN_MARK_RE.search(s)
+            or BASE_PLATE_MARK_RE.search(s)
+            or BRACING_MARK_RE.search(s)
+        )
+
+    if next_line and not _is_other_mark_line(next_line):
+        parts.append(next_line)
+    elif next_line and len(next_line) <= 12 and next_line.replace(".", "").isdigit():
+        # Bare dimension on the next line (common under a mark)
+        parts.append(next_line)
+
+    if prev_line and not _is_other_mark_line(prev_line):
+        if len(prev_line) <= 12 and prev_line.replace(".", "").isdigit():
+            parts.insert(0, prev_line)
+
+    window = " ".join(p for p in parts if p)
+    if len(window) >= 2:
+        return window
+
+    lo = max(0, start - min(radius, 40))
+    hi = min(len(text), end + min(radius, 40))
     return text[lo:hi]
+
+
+def _mark_local_text(text: str, mark: str, radius: int = 80) -> str:
+    """
+    Return text near a whole-word mark only (so B4 does not hit inside BR4).
+    """
+    if not text or not mark:
+        return ""
+    pattern = re.compile(rf"(?<![A-Z0-9]){re.escape(mark)}(?![A-Z0-9])", re.IGNORECASE)
+    m = pattern.search(text)
+    if not m:
+        return ""
+    return _nearby_window(text, m.start(), m.end(), radius=radius)
+
+
+def length_from_parallel_dimension(
+    mark_item: dict[str, Any],
+    dims: list[dict[str, Any]],
+    preferred_direction: Optional[str] = None,
+) -> tuple[Optional[float], str]:
+    """
+    Pick the dimension written in the SAME DIRECTION as the member.
+
+    On plans:
+      - Vertical beam (B3, B7, B8) → vertical dim beside it (1500 / 2000 / 6000)
+      - Horizontal beam (B4) → horizontal dim above/below (6000)
+
+    Among well-aligned dims, choose the NEAREST one (so B3 gets 1500, not a
+    far-away 6000 that happens to share the same X grid line).
+    """
+    if not dims:
+        return None, ""
+
+    direction = preferred_direction or mark_item.get("orientation") or "unknown"
+    mx, my = mark_item["cx"], mark_item["cy"]
+
+    def collect(direction_name: str) -> list[tuple[float, float, dict[str, Any]]]:
+        """Return list of (align_err, dist, dim) for viable candidates."""
+        out = []
+        for d in dims:
+            dx = abs(d["cx"] - mx)
+            dy = abs(d["cy"] - my)
+            dist = float(np.hypot(dx, dy))
+            if dist < 8:
+                continue
+            if direction_name == "vertical":
+                align, along = dx, dy
+                orient_ok = d.get("orientation") in ("vertical", "unknown")
+            else:
+                align, along = dy, dx
+                orient_ok = d.get("orientation") in ("horizontal", "unknown")
+            # Must be offset along the member, and tightly aligned perpendicular
+            if align > 80:
+                continue
+            if along < 12:
+                continue
+            # Soft cap: don't jump across the whole sheet for a "same grid line" dim
+            if along > 220 and align > 25:
+                continue
+            if along > 350:
+                continue
+            # Prefer matching orientation; still allow unknown
+            if not orient_ok and d.get("orientation") not in ("unknown", None):
+                # opposite orientation — skip for this direction pass
+                continue
+            out.append((align, dist, d))
+        return out
+
+    directions = (
+        [direction] if direction in ("vertical", "horizontal") else ["vertical", "horizontal"]
+    )
+
+    best: Optional[tuple[float, float, dict, str]] = None
+    for dir_name in directions:
+        cands = collect(dir_name)
+        if not cands:
+            continue
+        # Sort by distance first, then alignment
+        cands.sort(key=lambda t: (t[1], t[0]))
+        align, dist, dim = cands[0]
+        # Bonus: if dim orientation matches dir, prefer it over opposite-dir result
+        score_key = (dist, align)
+        if best is None or score_key < (best[0], best[1]):
+            best = (dist, align, dim, dir_name)
+
+    if best is None:
+        nearest = min(dims, key=lambda d: float(np.hypot(d["cx"] - mx, d["cy"] - my)))
+        return nearest.get("value_mm"), "nearest"
+
+    return best[2].get("value_mm"), best[3]
 
 
 def _first_section(window: str) -> str:
@@ -344,7 +497,6 @@ def _first_length(window: str) -> Optional[float]:
             return float(explicit.group(2)) * 1000.0
     for m in LENGTH_RE.finditer(window):
         val = _parse_length_mm(m)
-        # Skip tiny numbers that are likely grid refs / bolt sizes
         if val is not None and val >= 200:
             return val
     return None
@@ -365,18 +517,396 @@ def _first_material(window: str) -> str:
     return m.group(0).upper().replace(" ", "") if m else ""
 
 
-def extract_beams_regex(text: str, page_no: int) -> list[dict[str, Any]]:
-    """Extract beam rows from page text using mark-centric regex."""
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for m in BEAM_MARK_RE.finditer(text):
-        mark = f"B{m.group(1).upper()}"
-        if mark in seen:
+def _word_center(w: dict[str, Any]) -> tuple[float, float]:
+    return ((w["x0"] + w["x1"]) / 2.0, (w["top"] + w["bottom"]) / 2.0)
+
+
+def _word_orientation(w: dict[str, Any]) -> str:
+    """Infer text direction from bounding-box aspect ratio."""
+    width = max(0.1, w["x1"] - w["x0"])
+    height = max(0.1, w["bottom"] - w["top"])
+    if height > width * 1.25:
+        return "vertical"
+    if width > height * 1.25:
+        return "horizontal"
+    return "unknown"
+
+
+def _normalize_dim_token(raw: str, orientation: str = "unknown") -> Optional[float]:
+    """
+    Parse a dimension token to mm.
+    Rotated vertical dims are often extracted reversed (1500 → '0051').
+    Try the token as-is, then reversed when orientation is vertical.
+    """
+    candidates = [raw]
+    if orientation == "vertical" and raw.isdigit() and len(raw) >= 3:
+        candidates.append(raw[::-1])
+    # Also try reverse when the forward value looks like a leading-zero artifact
+    if raw.isdigit() and raw.startswith("0") and len(raw) >= 3:
+        candidates.append(raw[::-1])
+
+    for cand in candidates:
+        dm = DIM_VALUE_RE.fullmatch(cand)
+        if not dm:
+            # bare digits without unit
+            if re.fullmatch(r"\d{3,5}(?:\.\d+)?", cand):
+                raw_val = float(cand)
+            else:
+                continue
+        else:
+            raw_val = float(dm.group("val"))
+        if 100 <= raw_val <= 30000:
+            # Prefer values that don't look like reversed leftovers starting with 0
+            if cand.startswith("0") and len(cand) >= 4 and orientation == "vertical":
+                continue
+            unit = ""
+            um = re.search(r"(mm|cm|m)$", cand, re.IGNORECASE)
+            if um:
+                unit = um.group(1)
+            return _to_mm(raw_val, unit)
+    return None
+
+
+def collect_page_geometry(page: pdfplumber.page.Page) -> dict[str, list[dict[str, Any]]]:
+    """
+    Pull words with coordinates from a digital PDF page.
+    Returns marks (beams/columns/bracings/baseplates) and dimension values.
+
+    Also rebuilds vertically-stacked / rotated dimension numbers from raw
+    character positions (common on plan drawings where dims run along the beam).
+    """
+    try:
+        words = page.extract_words(
+            use_text_flow=False,
+            keep_blank_chars=False,
+            extra_attrs=["size"],
+        ) or []
+    except Exception as exc:  # noqa: BLE001
+        print(f"[geometry] extract_words failed: {exc}")
+        words = []
+
+    beams: list[dict[str, Any]] = []
+    columns: list[dict[str, Any]] = []
+    bracings: list[dict[str, Any]] = []
+    base_plates: list[dict[str, Any]] = []
+    dims: list[dict[str, Any]] = []
+
+    def _add_mark(raw: str, item: dict[str, Any]) -> bool:
+        if re.fullmatch(r"(?:B|BM|BEAM)[-\s]?\d{1,4}[A-Z]?", raw, re.IGNORECASE):
+            m = BEAM_MARK_RE.search(raw)
+            if m:
+                item["mark"] = f"B{m.group(1).upper()}"
+                beams.append(item)
+                return True
+        if re.fullmatch(r"(?:C|COL|COLUMN)[-\s]?\d{1,4}[A-Z]?", raw, re.IGNORECASE):
+            m = COLUMN_MARK_RE.search(raw)
+            if m:
+                item["mark"] = f"C{m.group(1).upper()}"
+                columns.append(item)
+                return True
+        if re.fullmatch(r"(?:BR|BRG|BRACING)[-\s]?\d{1,4}[A-Z]?", raw, re.IGNORECASE):
+            m = BRACING_MARK_RE.search(raw)
+            if m:
+                item["mark"] = f"BR{m.group(1).upper()}"
+                bracings.append(item)
+                return True
+        if re.fullmatch(r"(?:BP|B\.?P\.?)[-\s]?\d{1,4}[A-Z]?", raw, re.IGNORECASE):
+            m = BASE_PLATE_MARK_RE.search(raw)
+            if m:
+                item["mark"] = f"BP{m.group(1).upper()}"
+                base_plates.append(item)
+                return True
+        return False
+
+    for w in words:
+        raw = (w.get("text") or "").strip()
+        if not raw:
             continue
-        seen.add(mark)
+        cx, cy = _word_center(w)
+        orient = _word_orientation(w)
+        # Rotated vertical text often has taller bbox
+        width = max(0.1, w["x1"] - w["x0"])
+        height = max(0.1, w["bottom"] - w["top"])
+        if height > width * 1.2:
+            orient = "vertical"
+        item = {
+            "text": raw,
+            "x0": w["x0"],
+            "x1": w["x1"],
+            "top": w["top"],
+            "bottom": w["bottom"],
+            "cx": cx,
+            "cy": cy,
+            "orientation": orient,
+        }
+        if _add_mark(raw, item):
+            continue
+
+        # Dimension values (including reversed rotated tokens like 0051 → 1500)
+        val = _normalize_dim_token(raw, orient)
+        if val is not None:
+            item["value_mm"] = val
+            item["raw_value"] = val
+            dims.append(item)
+
+    # --- Rebuild rotated dims from chars when upright=False ---
+    try:
+        chars = page.chars or []
+    except Exception:  # noqa: BLE001
+        chars = []
+
+    rotated_digits = [
+        ch for ch in chars
+        if (ch.get("text") or "").strip().isdigit() and ch.get("upright") is False
+    ]
+    if rotated_digits:
+        rotated_digits.sort(key=lambda c: ((c["x0"] + c["x1"]) / 2.0, -c["top"]))
+        clusters: list[list] = []
+        for ch in rotated_digits:
+            cx = (ch["x0"] + ch["x1"]) / 2.0
+            placed = False
+            for cluster in clusters:
+                ccx = sum((c["x0"] + c["x1"]) / 2.0 for c in cluster) / len(cluster)
+                if abs(cx - ccx) <= 6.0:
+                    cluster.append(ch)
+                    placed = True
+                    break
+            if not placed:
+                clusters.append([ch])
+
+        existing = {round(d["value_mm"], 2) for d in dims}
+        for cluster in clusters:
+            if len(cluster) < 3:
+                continue
+            # For rotate(90) / upright=False: sort by top descending → correct reading
+            cluster.sort(key=lambda c: -c["top"])
+            text_val = "".join(c["text"] for c in cluster)
+            if re.fullmatch(r"\d{3,5}", text_val):
+                raw_val = float(text_val)
+                if 100 <= raw_val <= 30000:
+                    cx = sum((c["x0"] + c["x1"]) / 2.0 for c in cluster) / len(cluster)
+                    cy = (min(c["top"] for c in cluster) + max(c["bottom"] for c in cluster)) / 2.0
+                    # Avoid dupes already recovered via reversed words
+                    if any(
+                        abs(d["value_mm"] - raw_val) < 0.1 and abs(d["cx"] - cx) < 15
+                        for d in dims
+                    ):
+                        continue
+                    dims.append(
+                        {
+                            "text": text_val,
+                            "x0": min(c["x0"] for c in cluster),
+                            "x1": max(c["x1"] for c in cluster),
+                            "top": min(c["top"] for c in cluster),
+                            "bottom": max(c["bottom"] for c in cluster),
+                            "cx": cx,
+                            "cy": cy,
+                            "orientation": "vertical",
+                            "value_mm": raw_val,
+                            "raw_value": raw_val,
+                        }
+                    )
+                    existing.add(raw_val)
+
+    return {
+        "beams": beams,
+        "columns": columns,
+        "bracings": bracings,
+        "base_plates": base_plates,
+        "dims": dims,
+    }
+
+
+
+def diagonal_length_from_bay(
+    brace_item: dict[str, Any],
+    dims: list[dict[str, Any]],
+    text_window: str = "",
+) -> tuple[Optional[float], str]:
+    """
+    For diagonally placed members (bracings / sloping beams):
+      L = √(a² + b²)
+
+    a = nearest horizontal bay dimension, b = nearest vertical bay dimension.
+    Also accepts explicit pairs in nearby text: '3000x2000'.
+    """
+    # 1) Explicit bay pair in text near the mark
+    pair = BAY_PAIR_RE.search(text_window or "")
+    if pair:
+        a, b = float(pair.group(1)), float(pair.group(2))
+        # Ignore plate-like triples already handled elsewhere (e.g. 600x600)
+        if a >= 200 and b >= 200:
+            return triangle_diagonal_length(a, b), f"√({a}²+{b}²) from text pair"
+
+    if not dims:
+        return None, ""
+
+    mx, my = brace_item["cx"], brace_item["cy"]
+
+    # Split dims into likely horizontal-string vs vertical-string values
+    horiz: list[tuple[float, dict]] = []
+    vert: list[tuple[float, dict]] = []
+    for d in dims:
+        dx = abs(d["cx"] - mx)
+        dy = abs(d["cy"] - my)
+        dist = float(np.hypot(dx, dy))
+        if dist < 10 or dist > 500:
+            continue
+        # Horizontal dimension strings sit above/below the bay (similar Y band offset)
+        # Vertical dimension strings sit left/right (similar X band offset)
+        h_score = dist + dx * 0.5  # prefer closer in Y for horizontal dims
+        v_score = dist + dy * 0.5
+        if d.get("orientation") == "horizontal":
+            h_score -= 30
+        if d.get("orientation") == "vertical":
+            v_score -= 30
+        # Dims nearly aligned horizontally with brace center → vertical dim line
+        if dx < 90:
+            vert.append((v_score, d))
+        if dy < 90:
+            horiz.append((h_score, d))
+        # Also keep general nearest pools
+        if dy <= dx:
+            horiz.append((h_score + 20, d))
+        else:
+            vert.append((v_score + 20, d))
+
+    if not horiz or not vert:
+        # Fallback: two nearest distinct dim values as a,b
+        ordered = sorted(dims, key=lambda d: float(np.hypot(d["cx"] - mx, d["cy"] - my)))
+        vals = []
+        for d in ordered:
+            v = d.get("value_mm")
+            if v and v not in vals:
+                vals.append(v)
+            if len(vals) >= 2:
+                break
+        if len(vals) >= 2:
+            a, b = vals[0], vals[1]
+            return triangle_diagonal_length(a, b), f"√({a}²+{b}²) nearest dims"
+        return None, ""
+
+    horiz.sort(key=lambda t: t[0])
+    vert.sort(key=lambda t: t[0])
+    a = horiz[0][1]["value_mm"]
+    b = vert[0][1]["value_mm"]
+    # Avoid using the same physical dim twice when pools overlap
+    if a == b and len(horiz) > 1:
+        a = horiz[1][1]["value_mm"]
+    if a == b and len(vert) > 1:
+        b = vert[1][1]["value_mm"]
+    return triangle_diagonal_length(a, b), f"√({a}²+{b}²)"
+
+
+
+def apply_geometry_lengths(
+    rows: list[dict[str, Any]],
+    geo_marks: list[dict[str, Any]],
+    dims: list[dict[str, Any]],
+    length_key: str,
+    diagonal: bool = False,
+    text: str = "",
+) -> list[dict[str, Any]]:
+    """
+    Attach / override lengths using plan geometry.
+    Keeps one row per mark occurrence when the same mark appears multiple times
+    (e.g. two B8 members both length 6000).
+    """
+    if not geo_marks:
+        return rows
+
+    # Index existing text-extracted rows by mark for section/material reuse
+    by_mark: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        by_mark.setdefault(r.get("Mark") or "", r)
+
+    built: list[dict[str, Any]] = []
+    for idx, g in enumerate(geo_marks):
+        mark = g.get("mark") or ""
+        base = dict(by_mark.get(mark) or {"Mark": mark})
+        base["Mark"] = mark
+        # Stable instance id so two B8@6000 rows are not collapsed later
+        base["_instance"] = f"{mark}-{idx}-{round(g.get('cx', 0))}-{round(g.get('cy', 0))}"
+
+        if diagonal:
+            local = _mark_local_text(text, mark, radius=160)
+            length, how = diagonal_length_from_bay(g, dims, local)
+            if length is not None:
+                base[length_key] = length
+                base["Length Method"] = how
+        else:
+            preferred = g.get("orientation")
+            if preferred not in ("vertical", "horizontal"):
+                preferred = None
+            length, direction = length_from_parallel_dimension(
+                g, dims, preferred_direction=preferred
+            )
+            existing = base.get(length_key)
+            # Prefer explicit schedule lengths (L=3000) over nearby grid dims.
+            # Geometry wins when text had no length, or for multi-instance plan marks.
+            has_explicit = existing not in ("", None) and not base.get("Length Method")
+            if length is not None and not has_explicit:
+                base[length_key] = length
+                base["Length Method"] = f"parallel-{direction}"
+                if direction in ("vertical", "horizontal"):
+                    base["Member Direction"] = direction
+            elif has_explicit:
+                base["Length Method"] = base.get("Length Method") or "explicit-text"
+                if length is not None and direction in ("vertical", "horizontal"):
+                    base["Member Direction"] = direction
+
+        built.append(base)
+
+    if not built:
+        return rows
+
+    geo_mark_set = {g.get("mark") for g in geo_marks}
+    extras = [r for r in rows if (r.get("Mark") or "") not in geo_mark_set]
+    return built + extras
+
+
+def extract_beams_regex(
+    text: str,
+    page_no: int,
+    geometry: Optional[dict[str, list]] = None,
+) -> list[dict[str, Any]]:
+    """
+    Extract beam rows.
+    Length rule (plan drawings): use the dimension written in the SAME DIRECTION
+    as the beam (vertical dim for vertical beams, horizontal dim for horizontal).
+    Example from typical plans: B3=1500, B8=6000, B7=2000, B4=6000.
+    """
+    rows: list[dict[str, Any]] = []
+    seen_spans: set[tuple[int, int]] = set()
+    for m in BEAM_MARK_RE.finditer(text):
+        # Skip beam-mark matches that are actually bracing marks (BR1 contains B? no)
+        # Guard: character before match must not make it part of BR/BP
+        if m.start() > 0 and text[m.start() - 1].upper() in ("R", "P"):
+            # e.g. accidental match — BEAM_MARK should not hit BR, but be safe
+            continue
+        mark = f"B{m.group(1).upper()}"
+        span = (m.start(), m.end())
+        if span in seen_spans:
+            continue
+        seen_spans.add(span)
         window = _nearby_window(text, m.start(), m.end())
+        # Do NOT pull bay-pair diagonals into orthogonal beam lengths
         elevs = _elevations(window)
         length = _first_length(window)
+        # Ignore lengths that clearly came from "3000x2000" bay pairs unless
+        # the beam is marked diagonal (handled later).
+        if BAY_PAIR_RE.search(window) and not re.search(
+            r"\b(DIAGONAL|SLOPING|INCLINED|SLOPED)\b", window, re.IGNORECASE
+        ):
+            # Prefer a single L= value; if only the pair exists, leave empty
+            # for geometry to fill from parallel dims.
+            explicit = re.search(
+                r"(?:L|LEN(?:GTH)?)\s*[=:]\s*(\d{3,5}(?:\.\d+)?)",
+                window,
+                re.IGNORECASE,
+            )
+            length = float(explicit.group(1)) if explicit else None
+
         start_el: Any = ""
         end_el: Any = ""
         start_m = re.search(
@@ -408,10 +938,29 @@ def extract_beams_regex(text: str, page_no: int) -> list[dict[str, Any]]:
                 "Page": page_no,
             }
         )
+
+    # Deduplicate identical text marks before geometry expands instances
+    rows = dedupe_by_mark(rows, allow_multi=False)
+
+    if geometry:
+        rows = apply_geometry_lengths(
+            rows,
+            geometry.get("beams") or [],
+            geometry.get("dims") or [],
+            length_key="Length (mm)",
+            diagonal=False,
+            text=text,
+        )
+        for r in rows:
+            r.setdefault("Page", page_no)
     return rows
 
 
-def extract_columns_regex(text: str, page_no: int) -> list[dict[str, Any]]:
+def extract_columns_regex(
+    text: str,
+    page_no: int,
+    geometry: Optional[dict[str, list]] = None,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for m in COLUMN_MARK_RE.finditer(text):
@@ -443,6 +992,19 @@ def extract_columns_regex(text: str, page_no: int) -> list[dict[str, Any]]:
                 "Page": page_no,
             }
         )
+
+    # On ELEVATION views columns are vertical — associate vertical dims when present
+    if geometry:
+        rows = apply_geometry_lengths(
+            rows,
+            geometry.get("columns") or [],
+            geometry.get("dims") or [],
+            length_key="Height (mm)",
+            diagonal=False,
+            text=text,
+        )
+        for r in rows:
+            r.setdefault("Page", page_no)
     return rows
 
 
@@ -500,8 +1062,17 @@ def extract_base_plates_regex(text: str, page_no: int) -> list[dict[str, Any]]:
     return rows
 
 
-def extract_bracings_regex(text: str, page_no: int) -> list[dict[str, Any]]:
-    """Bracings feed the Summary sheet (count by length)."""
+def extract_bracings_regex(
+    text: str,
+    page_no: int,
+    geometry: Optional[dict[str, list]] = None,
+) -> list[dict[str, Any]]:
+    """
+    Bracings (and any diagonally placed member) — length from triangle diagonal:
+        L = √(a² + b²)
+    where a, b are the horizontal and vertical bay dimensions the brace spans.
+    Example: bay 3000 × 2000 → L = 3605.55
+    """
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for m in BRACING_MARK_RE.finditer(text):
@@ -509,16 +1080,46 @@ def extract_bracings_regex(text: str, page_no: int) -> list[dict[str, Any]]:
         if mark in seen:
             continue
         seen.add(mark)
-        window = _nearby_window(text, m.start(), m.end())
-        length = _first_length(window)
+        window = _nearby_window(text, m.start(), m.end(), radius=160)
+        length = None
+        method = ""
+        pair = BAY_PAIR_RE.search(window)
+        if pair:
+            a, b = float(pair.group(1)), float(pair.group(2))
+            if a >= 200 and b >= 200:
+                length = triangle_diagonal_length(a, b)
+                method = f"√({a}²+{b}²) from text pair"
+        if length is None:
+            # Explicit L= hypotenuse already written on the sheet
+            explicit = re.search(
+                r"(?:L|LEN(?:GTH)?)\s*[=:]\s*(\d{3,5}(?:\.\d+)?)",
+                window,
+                re.IGNORECASE,
+            )
+            if explicit:
+                length = float(explicit.group(1))
+                method = "explicit"
         rows.append(
             {
                 "Mark": mark,
                 "Section Size": _first_section(window),
                 "Length (mm)": length if length is not None else "",
+                "Length Method": method,
                 "Page": page_no,
             }
         )
+
+    if geometry:
+        rows = apply_geometry_lengths(
+            rows,
+            geometry.get("bracings") or [],
+            geometry.get("dims") or [],
+            length_key="Length (mm)",
+            diagonal=True,
+            text=text,
+        )
+        for r in rows:
+            r.setdefault("Page", page_no)
     return rows
 
 
@@ -533,12 +1134,20 @@ extract structural members as JSON with keys: beams, columns, base_plates, braci
 beams: [{mark, section_size, length_mm, material, start_el, end_el}]
 columns: [{mark, section_size, height_mm, base_elevation, top_elevation, material}]
 base_plates: [{mark, plate_size, thickness_mm, anchor_bolt_dia, anchor_bolt_qty, top_of_concrete_el, weight_kg}]
-bracings: [{mark, section_size, length_mm}]
+bracings: [{mark, section_size, length_mm, length_method}]
 
 Rules:
 - Use marks exactly as on the drawing (B1, C3, BP2, BR1).
 - Section sizes like W18x35, ISMB400, UB457x191x67.
-- Lengths/heights in millimetres (convert metres ×1000).
+- Lengths/heights in millimetres (convert metres ×1000). Convert cm ×10.
+- PLAN LENGTH RULE: the size/dimension is written in the SAME DIRECTION as the beam.
+  Vertical beams use the vertical dimension string beside them (e.g. B3=1500, B8=6000, B7=2000).
+  Horizontal beams use the horizontal dimension string (e.g. B4=6000).
+  If the same mark appears twice (two B8), each has its own parallel dimension (often both 6000).
+- DIAGONAL RULE: if a beam/column/brace is placed diagonally (e.g. BR1, BR4),
+  compute length with the triangle diagonal formula L = sqrt(a^2 + b^2)
+  where a and b are the horizontal and vertical bay spans the member covers.
+  Set length_method to e.g. "sqrt(3000^2+2000^2)".
 - If a field is unknown, use empty string.
 - Return ONLY valid JSON, no markdown.
 """
@@ -669,23 +1278,53 @@ def _merge_ai_bracings(ai_rows: list[dict], page_no: int) -> list[dict[str, Any]
                 "Mark": mark,
                 "Section Size": _normalize_section(str(r.get("section_size") or "")),
                 "Length (mm)": r.get("length_mm") or "",
+                "Length Method": r.get("length_method") or "",
                 "Page": page_no,
             }
         )
     return out
 
 
-def dedupe_by_mark(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep the richest row per Mark (most non-empty fields)."""
+def dedupe_by_mark(rows: list[dict[str, Any]], allow_multi: bool = False) -> list[dict[str, Any]]:
+    """
+    Keep the richest row per Mark (most non-empty fields).
+    When allow_multi=True (plan beams/bracings), keep separate instances of the
+    same mark (e.g. two B8 members each 6000) keyed by Mark+Length+Page.
+    """
+    if not allow_multi:
+        best: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            mark = row.get("Mark") or ""
+            if not mark:
+                continue
+            score = sum(1 for v in row.values() if v not in ("", None))
+            if mark not in best or score > sum(
+                1 for v in best[mark].values() if v not in ("", None)
+            ):
+                best[mark] = row
+        return list(best.values())
+
     best: dict[str, dict[str, Any]] = {}
     for row in rows:
         mark = row.get("Mark") or ""
         if not mark:
             continue
-        score = sum(1 for v in row.values() if v not in ("", None))
-        if mark not in best or score > sum(1 for v in best[mark].values() if v not in ("", None)):
-            best[mark] = row
-    return list(best.values())
+        length = row.get("Length (mm)", row.get("Height (mm)", ""))
+        page = row.get("Page", "")
+        inst = row.get("_instance", "")
+        key = f"{mark}|{length}|{page}|{row.get('Length Method', '')}|{inst}"
+        score = sum(1 for k, v in row.items() if k != "_instance" and v not in ("", None))
+        if key not in best or score > sum(
+            1 for k, v in best[key].items() if k != "_instance" and v not in ("", None)
+        ):
+            best[key] = row
+    # Strip internal instance keys before returning
+    cleaned = []
+    for row in best.values():
+        r = dict(row)
+        r.pop("_instance", None)
+        cleaned.append(r)
+    return cleaned
 
 
 # =============================================================================
@@ -727,6 +1366,10 @@ def process_pdf(
     - plan_pages: used for beams + bracings
     - elevation_pages: used for columns + base plates
     If either is None, scan those member types on all selected/all pages.
+
+    Length association on plan pages:
+      - Orthogonal members → dimension written in the same direction as the member
+      - Diagonal members (BR*) → L = √(a² + b²) from bay width × height
     """
     beams: list[dict] = []
     columns: list[dict] = []
@@ -747,12 +1390,25 @@ def process_pdf(
             page_sources[page_no] = source
             all_text_snippets.append(f"--- Page {page_no} ---\n{text[:2000]}")
 
-            # Regex pass
+            # Word-coordinate geometry (digital PDFs) for direction-aware lengths
+            geometry = collect_page_geometry(page) if source.startswith("digital") else {
+                "beams": [],
+                "columns": [],
+                "bracings": [],
+                "base_plates": [],
+                "dims": [],
+            }
+
+            # Regex + geometry pass
             if page_no in plan_set:
-                beams.extend(extract_beams_regex(text, page_no))
-                bracings.extend(extract_bracings_regex(text, page_no))
+                page_beams = extract_beams_regex(text, page_no, geometry=geometry)
+                page_beams = _apply_diagonal_override_for_sloping_beams(
+                    page_beams, text, geometry
+                )
+                beams.extend(page_beams)
+                bracings.extend(extract_bracings_regex(text, page_no, geometry=geometry))
             if page_no in elev_set:
-                columns.extend(extract_columns_regex(text, page_no))
+                columns.extend(extract_columns_regex(text, page_no, geometry=geometry))
                 base_plates.extend(extract_base_plates_regex(text, page_no))
 
             # AI enrichment pass (optional)
@@ -767,10 +1423,10 @@ def process_pdf(
             # Free page resources promptly
             del page
 
-    beams = dedupe_by_mark(beams)
-    columns = dedupe_by_mark(columns)
-    base_plates = dedupe_by_mark(base_plates)
-    bracings = dedupe_by_mark(bracings)
+    beams = dedupe_by_mark(beams, allow_multi=True)
+    columns = dedupe_by_mark(columns, allow_multi=False)
+    base_plates = dedupe_by_mark(base_plates, allow_multi=False)
+    bracings = dedupe_by_mark(bracings, allow_multi=True)
 
     summary_rows, engineer_notes = build_summary(
         beams, columns, base_plates, bracings, page_sources, all_text_snippets
@@ -785,6 +1441,41 @@ def process_pdf(
         "engineer_notes": engineer_notes,
         "page_sources": page_sources,
     }
+
+
+def _apply_diagonal_override_for_sloping_beams(
+    beams: list[dict[str, Any]],
+    text: str,
+    geometry: dict[str, list],
+) -> list[dict[str, Any]]:
+    """
+    If text near a beam mark says DIAGONAL / SLOPING / INCLINED, recompute
+    length with √(a² + b²) using nearby bay dimensions.
+    Uses whole-word mark matching so B4 does not match inside BR4.
+    """
+    dims = geometry.get("dims") or []
+    # Keep ALL geometry instances per mark (two B8s, etc.)
+    geo_items = geometry.get("beams") or []
+    out = []
+    for row in beams:
+        mark = row.get("Mark") or ""
+        local = _mark_local_text(text, mark, radius=40)
+        # Only treat as diagonal when the keyword is on THIS mark's compact window
+        is_diag = bool(
+            re.search(r"\b(DIAGONAL|SLOPING|INCLINED|SLOPED)\b", local, re.IGNORECASE)
+        )
+        if is_diag and dims:
+            # Prefer the geometry item closest to this row's prior coords if any;
+            # otherwise first geometry match for the mark.
+            g = next((x for x in geo_items if x.get("mark") == mark), None)
+            if g is not None:
+                length, how = diagonal_length_from_bay(g, dims, local)
+                if length is not None:
+                    row = dict(row)
+                    row["Length (mm)"] = length
+                    row["Length Method"] = how
+        out.append(row)
+    return out
 
 
 # =============================================================================
@@ -1015,7 +1706,16 @@ def build_excel(result: dict[str, Any]) -> bytes:
     _write_sheet(
         ws1,
         result["beams"],
-        ["Mark", "Section Size", "Length (mm)", "Material", "Start EL", "End EL", "Page"],
+        [
+            "Mark",
+            "Section Size",
+            "Length (mm)",
+            "Length Method",
+            "Material",
+            "Start EL",
+            "End EL",
+            "Page",
+        ],
     )
 
     # Sheet 2 — Columns
@@ -1051,9 +1751,31 @@ def build_excel(result: dict[str, Any]) -> bytes:
         ],
     )
 
+    # Hidden helper sheet for bracing lengths used in Summary (also listed in notes)
+    # Bracings are not a primary Excel tab, but Length Method is kept on beam/brace rows.
+    # Append bracing detail into Summary narrative already; also stash on Summary rows.
+
     # Sheet 4 — Summary
     ws4 = wb.create_sheet("Summary")
+    # Include bracing length breakdown already produced by build_summary
     _write_sheet(ws4, result["summary"], ["Category", "Metric", "Value"])
+    # Append bracing table under narrative for transparency
+    brace_start = len(result["summary"]) + 16
+    ws4.cell(row=brace_start, column=1, value="Bracing Lengths (√(a²+b²) when diagonal)").font = Font(bold=True)
+    brace_rows = result.get("bracings") or []
+    if brace_rows:
+        headers = ["Mark", "Section Size", "Length (mm)", "Length Method", "Page"]
+        for c_idx, h in enumerate(headers, start=1):
+            cell = ws4.cell(row=brace_start + 1, column=c_idx, value=h)
+            cell.fill = HEADER_FILL
+            cell.font = HEADER_FONT
+        for r_idx, br in enumerate(brace_rows, start=brace_start + 2):
+            ws4.cell(row=r_idx, column=1, value=br.get("Mark", ""))
+            ws4.cell(row=r_idx, column=2, value=br.get("Section Size", ""))
+            ws4.cell(row=r_idx, column=3, value=br.get("Length (mm)", ""))
+            ws4.cell(row=r_idx, column=4, value=br.get("Length Method", ""))
+            ws4.cell(row=r_idx, column=5, value=br.get("Page", ""))
+
     # Append full narrative at the bottom for readability
     start = len(result["summary"]) + 3
     ws4.cell(row=start, column=1, value="Engineer Narrative").font = Font(bold=True)
