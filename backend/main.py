@@ -206,10 +206,18 @@ def extract_page_text(page: pdfplumber.page.Page) -> tuple[str, str]:
 # ===========================================================================
 
 def extract_tables_text(pdf_path: str, page_number: int) -> str:
-    """Try Camelot lattice/stream tables; return concatenated cell text."""
-    try:
-        import camelot  # lazy import — heavy / optional deps
+    """
+    Try Camelot lattice/stream tables; return concatenated cell text.
 
+    Camelot is optional. It is not in requirements.txt because camelot-py[cv]
+    depends on pdftopng, which often fails to install on Windows.
+    """
+    try:
+        import camelot  # type: ignore  # optional dependency
+    except ImportError:
+        return ""
+
+    try:
         tables = camelot.read_pdf(
             pdf_path,
             pages=str(page_number),

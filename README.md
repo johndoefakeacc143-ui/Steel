@@ -28,17 +28,21 @@ README.md
 - Python 3.10+
 - Node.js 18+
 - [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) installed on the system
-- Optional: Ghostscript (improves Camelot table extraction)
 - OpenAI API key (optional but recommended for better AI extraction)
+- Optional: Ghostscript + `camelot-py` (table extraction; not required)
 
 ### Install Tesseract (examples)
 
 ```bash
 # Ubuntu / Debian
-sudo apt-get update && sudo apt-get install -y tesseract-ocr ghostscript
+sudo apt-get update && sudo apt-get install -y tesseract-ocr
 
 # macOS
-brew install tesseract ghostscript
+brew install tesseract
+
+# Windows
+# Install from https://github.com/UB-Mannheim/tesseract/wiki
+# and ensure `tesseract` is on your PATH
 ```
 
 ## Setup
@@ -65,13 +69,24 @@ OPENAI_MODEL=gpt-4o-mini
 ```bash
 cd backend
 python -m venv .venv
-# Windows: .venv\Scripts\activate
+
+# Windows:
+.venv\Scripts\activate
+
+# macOS / Linux:
 source .venv/bin/activate
+
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 API docs: http://127.0.0.1:8000/docs
+
+> **Windows note:** `camelot-py[cv]` is intentionally omitted from `requirements.txt`
+> because its `pdftopng` dependency often fails to install. The app works without it
+> (pdfplumber + OCR + AI). To add Camelot later: `pip install camelot-py==0.11.0`
+> and install Ghostscript.
 
 ### 3. Frontend
 
@@ -132,5 +147,5 @@ Key variables:
 ## Notes
 
 - Large scanned drawings are slower because each page is rendered and OCR’d.
-- Camelot table extraction is best-effort; if Ghostscript is missing, the app continues with text/OCR + AI.
+- Camelot table extraction is optional and skipped automatically if not installed.
 - CORS is open for local development; tighten `allow_origins` before production.
