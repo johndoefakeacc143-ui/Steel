@@ -55,8 +55,13 @@ brew install tesseract ghostscript
 
 ```bash
 cp .env.example .env
-# Edit .env and set OPENAI_API_KEY=sk-...
+# Edit the project-root .env (NOT only a random copy elsewhere):
+#   OPENAI_API_KEY=sk-proj-your-real-key
+# No quotes. One line. Then restart uvicorn.
 ```
+
+Confirm AI is on: open [http://127.0.0.1:8000/api/health](http://127.0.0.1:8000/api/health) — `"openai_configured": true`.  
+On startup the backend prints `[startup] OpenAI READY` or `OpenAI OFF`.
 
 Regex/OCR extraction works without an API key. OpenAI improves mark association and the Summary narrative.
 

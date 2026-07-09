@@ -500,7 +500,23 @@ export default function App() {
   const [loadingLabel, setLoadingLabel] = useState(
     "Uploading and detecting digital vs scanned pages…"
   );
+  const [aiStatus, setAiStatus] = useState(null);
   const progressTimer = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    axios
+      .get(`${API_BASE}/api/health`, { timeout: 5000 })
+      .then(({ data }) => {
+        if (!cancelled) setAiStatus(data);
+      })
+      .catch(() => {
+        if (!cancelled) setAiStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [screen]);
 
   const clearProgress = () => {
     if (progressTimer.current) {
@@ -621,9 +637,27 @@ export default function App() {
           <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-steel-500">
             Structural steel · PDF → Excel
           </p>
-          <p className="hidden font-mono text-[11px] text-steel-400 sm:block">
-            Beams · Columns · Base Plates · Summary
-          </p>
+          {aiStatus ? (
+            <p
+              className={`font-mono text-[11px] uppercase tracking-[0.18em] ${
+                aiStatus.openai_configured ? "text-emerald-700" : "text-ember-600"
+              }`}
+              title={
+                aiStatus.openai_configured
+                  ? `Model ${aiStatus.openai_model || "gpt-4o-mini"}`
+                  : aiStatus.openai?.hint ||
+                    "Set OPENAI_API_KEY in project-root .env and restart backend"
+              }
+            >
+              {aiStatus.openai_configured
+                ? `AI on · ${aiStatus.openai_model || "gpt-4o-mini"}`
+                : "AI off · set OPENAI_API_KEY in .env"}
+            </p>
+          ) : (
+            <p className="hidden font-mono text-[11px] text-steel-400 sm:block">
+              Beams · Columns · Base Plates · Summary
+            </p>
+          )}
         </div>
       </header>
 

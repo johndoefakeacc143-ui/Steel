@@ -42,23 +42,126 @@ load_dotenv(dotenv_path=_BACKEND_ENV)
 load_dotenv()  # also allow process env
 
 
+def _clean_api_key(raw: Optional[str]) -> str:
+    """Normalize pasted keys: strip quotes/BOM/whitespace; drop placeholders."""
+    if not raw:
+        return ""
+    key = str(raw).strip().lstrip("\ufeff").strip()
+    # Common paste mistakes: quotes, export prefix, trailing comments
+    if key.lower().startswith("export "):
+        key = key[7:].strip()
+    if "=" in key and key.upper().startswith("OPENAI_API_KEY"):
+        key = key.split("=", 1)[1].strip()
+    if (key.startswith('"') and key.endswith('"')) or (
+        key.startswith("'") and key.endswith("'")
+    ):
+        key = key[1:-1].strip()
+    # Inline comment after value: sk-... # my key
+    if " #" in key:
+        key = key.split(" #", 1)[0].strip()
+    placeholders = {
+        "",
+        "sk-...",
+        "sk-your-key-here",
+        "your_key_here",
+        "changeme",
+        "paste_here",
+    }
+    if not key or key.lower() in placeholders or key.lower().startswith("sk-your"):
+        return ""
+    return key
+
+
+def _read_key_from_env_file(path: Path) -> str:
+    """Read OPENAI_API_KEY from a .env file without letting empty values win."""
+    if not path.exists():
+        return ""
+    try:
+        from dotenv import dotenv_values
+
+        values = dotenv_values(path) or {}
+    except Exception:  # noqa: BLE001
+        return ""
+    # Accept a few common misspellings / aliases
+    for name in (
+        "OPENAI_API_KEY",
+        "OPEN_AI_API_KEY",
+        "OPENAI_KEY",
+        "OPENAI_APIKEY",
+    ):
+        cleaned = _clean_api_key(values.get(name))
+        if cleaned:
+            return cleaned
+    return ""
+
+
 def _refresh_openai_key() -> str:
     """
     Re-read .env on each AI call so editing OPENAI_API_KEY takes effect
     after save (uvicorn --reload also picks it up on file change).
+
+    Important: an empty OPENAI_API_KEY= in backend/.env must NOT wipe a real
+    key set in the project-root .env (python-dotenv override=True would).
     """
-    load_dotenv(dotenv_path=_ROOT_ENV, override=True)
-    load_dotenv(dotenv_path=_BACKEND_ENV, override=True)
-    key = (os.getenv("OPENAI_API_KEY") or "").strip()
-    # Treat placeholder values as empty
-    if not key or key.lower().startswith("sk-your") or key == "sk-...":
-        return ""
-    return key
+    # Prefer non-empty values: root .env → backend/.env → process env
+    for path in (_ROOT_ENV, _BACKEND_ENV):
+        key = _read_key_from_env_file(path)
+        if key:
+            os.environ["OPENAI_API_KEY"] = key
+            return key
+
+    # Process / shell env last (also cleaned)
+    key = _clean_api_key(os.getenv("OPENAI_API_KEY"))
+    if key:
+        os.environ["OPENAI_API_KEY"] = key
+        return key
+    return ""
+
+
+def _openai_key_status() -> dict[str, Any]:
+    """Diagnostics for /api/health and console — never returns the raw key."""
+    root_key = _read_key_from_env_file(_ROOT_ENV)
+    backend_key = _read_key_from_env_file(_BACKEND_ENV)
+    process_key = _clean_api_key(os.getenv("OPENAI_API_KEY"))
+    active = _refresh_openai_key()
+    return {
+        "configured": bool(active),
+        "key_prefix": (active[:7] + "…") if active else None,
+        "key_length": len(active) if active else 0,
+        "root_env": str(_ROOT_ENV),
+        "root_env_exists": _ROOT_ENV.exists(),
+        "root_env_has_key": bool(root_key),
+        "backend_env": str(_BACKEND_ENV),
+        "backend_env_exists": _BACKEND_ENV.exists(),
+        "backend_env_has_key": bool(backend_key),
+        "process_env_has_key": bool(process_key),
+        "hint": (
+            None
+            if active
+            else (
+                f"Paste OPENAI_API_KEY=sk-... into {_ROOT_ENV} "
+                f"(or {_BACKEND_ENV}), save, then restart uvicorn."
+            )
+        ),
+    }
 
 
 OPENAI_API_KEY = _refresh_openai_key()
 MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MB
 PAGE_ASK_THRESHOLD = 5  # >5 pages → ask user which pages to scan
+
+# Startup banner so it's obvious whether AI will run
+_boot = _openai_key_status()
+if _boot["configured"]:
+    print(
+        f"[startup] OpenAI READY — key {_boot['key_prefix']} "
+        f"(len={_boot['key_length']}), model={os.getenv('OPENAI_MODEL', 'gpt-4o-mini')}"
+    )
+else:
+    print(
+        "[startup] OpenAI OFF — regex/OCR only. "
+        f"Paste OPENAI_API_KEY=sk-... into {_ROOT_ENV} (or {_BACKEND_ENV}) and restart."
+    )
 
 app = FastAPI(
     title="SteelDraw AI Extractor",
@@ -890,6 +993,9 @@ def length_from_mark_spacing(
     """
     Fallback when OCR dims are sparse: estimate length from spacing to the
     nearest same-mark neighbour along the member direction, scaled by grid.
+
+    For vertical members (B6, B7), only use neighbours in the SAME column
+    (small Δx) — ignore side-by-side labels that would give ~650 mm gaps.
     """
     if scale <= 0 or not same_mark_points:
         return None, ""
@@ -904,12 +1010,17 @@ def length_from_mark_spacing(
         if dist < 15:
             continue
         if direction == "vertical" or (direction == "unknown" and dy >= dx):
-            if dx > 40:
+            # Same vertical column only
+            if dx > 35:
+                continue
+            if dy < 40:
                 continue
             length = round(dy * scale)
             how = "spacing-vertical"
         else:
-            if dy > 40:
+            if dy > 35:
+                continue
+            if dx < 40:
                 continue
             length = round(dx * scale)
             how = "spacing-horizontal"
@@ -1002,6 +1113,94 @@ def diagonal_length_from_bay(
 
 
 
+def snap_length_to_drawing_dims(
+    length: Optional[float],
+    dims: list[dict[str, Any]],
+    tolerance: float = 0.12,
+) -> Optional[float]:
+    """
+    Snap a measured/spaced length to the nearest dimension callout on the sheet.
+    Example: spacing gives 1970 → snap to OCR'd 2000 (B6 vertical dim).
+    """
+    if length is None:
+        return None
+    candidates = sorted(
+        {
+            float(d["value_mm"])
+            for d in dims
+            if d.get("value_mm") not in ("", None)
+            and 400 <= float(d["value_mm"]) <= 20000
+        }
+    )
+    if not candidates:
+        # Common steel plan dims if OCR found nothing
+        candidates = [950, 1000, 1050, 1500, 2000, 2500, 3000, 4500, 6000]
+    best = None
+    best_err = None
+    for c in candidates:
+        err = abs(length - c) / c
+        if err <= tolerance and (best_err is None or err < best_err):
+            best, best_err = c, err
+    return best if best is not None else length
+
+
+def infer_member_direction_from_layout(
+    mark_item: dict[str, Any],
+    same_mark_points: list[dict[str, Any]],
+) -> Optional[str]:
+    """
+    Infer whether a mark runs vertically or horizontally from how its
+    instances are arranged on the plan.
+
+    Example: B6 labels stacked in a column with ~2000 mm vertical spacing
+    → member is vertical → use the vertical dimension string (2000), not a
+    nearby horizontal 3000/950 callout.
+
+    For marks with many instances (B6, B7), prefer overall cloud span over
+    nearest-neighbour so a horizontal row of vertical stubs is still vertical.
+    """
+    if len(same_mark_points) < 2:
+        return None
+
+    xs = [p["cx"] for p in same_mark_points]
+    ys = [p["cy"] for p in same_mark_points]
+    x_span = max(xs) - min(xs)
+    y_span = max(ys) - min(ys)
+
+    # Many instances: overall span is more reliable than nearest neighbour
+    if len(same_mark_points) >= 4:
+        if y_span > x_span * 1.15:
+            return "vertical"
+        if x_span > y_span * 1.15:
+            return "horizontal"
+
+    mx, my = mark_item["cx"], mark_item["cy"]
+    others = [
+        p
+        for p in same_mark_points
+        if abs(p["cx"] - mx) > 0.5 or abs(p["cy"] - my) > 0.5
+    ]
+    if not others:
+        if y_span > x_span * 1.5:
+            return "vertical"
+        if x_span > y_span * 1.5:
+            return "horizontal"
+        return None
+
+    nearest = min(others, key=lambda p: float(np.hypot(p["cx"] - mx, p["cy"] - my)))
+    dx = abs(nearest["cx"] - mx)
+    dy = abs(nearest["cy"] - my)
+    if dy > dx * 1.3 and dx < 50:
+        return "vertical"
+    if dx > dy * 1.3 and dy < 50:
+        return "horizontal"
+    if y_span > x_span * 1.5:
+        return "vertical"
+    if x_span > y_span * 1.5:
+        return "horizontal"
+    return None
+
+
 def apply_geometry_lengths(
     rows: list[dict[str, Any]],
     geo_marks: list[dict[str, Any]],
@@ -1037,39 +1236,81 @@ def apply_geometry_lengths(
         # Stable instance id so two B8@6000 rows are not collapsed later
         base["_instance"] = f"{mark}-{idx}-{round(g.get('cx', 0))}-{round(g.get('cy', 0))}"
 
+        peers = by_geo_mark.get(mark) or []
+
         if diagonal:
             local = _mark_local_text(text, mark, radius=160)
             length, how = diagonal_length_from_bay(g, dims, local)
-            if length is None and scale:
-                # Bay fallback: use nearest horiz+vert OCR/spacing dims already in diagonal_length_from_bay
-                pass
             if length is not None:
                 base[length_key] = length
                 base["Length Method"] = how
         else:
-            preferred = g.get("orientation")
+            # Prefer layout-inferred direction (B6 column → vertical → 2000)
+            preferred = infer_member_direction_from_layout(g, peers)
+            if preferred is None:
+                preferred = g.get("orientation")
             if preferred not in ("vertical", "horizontal"):
                 preferred = None
+
             length, direction = length_from_parallel_dimension(
                 g, dims, preferred_direction=preferred
             )
-            # Prefer grid-spacing when parallel association fell back to "nearest"
-            # (weak match) or found nothing — spacing is reliable on regular racks.
+
+            # Reject weak "nearest" hits for known-direction members
+            # (B6 vertical must not pick horizontal 3000/950).
+            if preferred and direction == "nearest":
+                length, direction = None, ""
+            # Also reject if direction contradicts preferred
+            if (
+                preferred
+                and direction in ("vertical", "horizontal")
+                and direction != preferred
+            ):
+                length, direction = None, ""
+
+            # Prefer grid-spacing along the member direction
             weak = length is None or direction == "nearest"
             if weak and scale:
                 s_len, s_how = length_from_mark_spacing(
                     g,
-                    by_geo_mark.get(mark) or [],
+                    peers,
                     scale,
                     preferred_direction=preferred,
                 )
                 if s_len is not None:
-                    # If we had a weak nearest dim, only override when spacing
-                    # is a clean structural length (multiples of 500).
-                    if length is None or (
-                        direction == "nearest" and s_len % 500 == 0
-                    ):
-                        length, direction = s_len, s_how
+                    # Snap 1970/1997/etc. → 2000 using drawing dim callouts
+                    snapped = snap_length_to_drawing_dims(s_len, dims)
+                    if length is None or direction == "nearest":
+                        length = snapped
+                        direction = s_how
+
+            # Final fallback: nearest dim in the preferred orientation
+            if length is None and preferred and dims:
+                pool = [
+                    d
+                    for d in dims
+                    if d.get("orientation") == preferred
+                    or d.get("orientation") == "unknown"
+                ]
+                if not pool:
+                    pool = list(dims)
+                if preferred == "vertical":
+                    pool = [
+                        d
+                        for d in pool
+                        if abs(d["cx"] - g["cx"]) < 150
+                        or d.get("orientation") == "vertical"
+                    ] or pool
+                nearest = min(
+                    pool,
+                    key=lambda d: float(np.hypot(d["cx"] - g["cx"], d["cy"] - g["cy"])),
+                )
+                length = nearest.get("value_mm")
+                direction = preferred
+
+            # Always snap orthogonal lengths to sheet dimension values
+            if length is not None and not str(direction).startswith("√"):
+                length = snap_length_to_drawing_dims(length, dims)
 
             existing = base.get(length_key)
             # Prefer explicit schedule lengths (L=3000) over nearby grid dims.
@@ -1083,10 +1324,12 @@ def apply_geometry_lengths(
                     base["Length Method"] = f"parallel-{direction}"
                     if direction in ("vertical", "horizontal"):
                         base["Member Direction"] = direction
+                    elif preferred:
+                        base["Member Direction"] = preferred
             elif has_explicit:
                 base["Length Method"] = base.get("Length Method") or "explicit-text"
-                if length is not None and direction in ("vertical", "horizontal"):
-                    base["Member Direction"] = direction
+                if preferred:
+                    base["Member Direction"] = preferred
 
         built.append(base)
 
@@ -1402,11 +1645,16 @@ def ai_extract_from_text(text: str, page_no: int) -> dict[str, list[dict]]:
     empty = {"beams": [], "columns": [], "base_plates": [], "bracings": []}
     api_key = _refresh_openai_key()
     if not api_key or not text.strip():
-        reason = (
-            "OPENAI_API_KEY not set in .env — paste your sk-... key and restart"
-            if not api_key
-            else "empty page text"
-        )
+        if not api_key:
+            st = _openai_key_status()
+            reason = (
+                "OPENAI_API_KEY not set — "
+                f"root .env has key={st['root_env_has_key']}, "
+                f"backend .env has key={st['backend_env_has_key']}. "
+                f"Edit {st['root_env']} to OPENAI_API_KEY=sk-... then restart uvicorn"
+            )
+        else:
+            reason = "empty page text"
         print(f"[AI extract] SKIPPED page {page_no} — {reason}")
         return empty
     try:
@@ -2094,7 +2342,13 @@ def build_summary(
         except Exception as exc:  # noqa: BLE001
             print(f"[AI summary] ERROR: {exc}")
     else:
-        print("[AI summary] SKIPPED — OPENAI_API_KEY not set")
+        st = _openai_key_status()
+        print(
+            "[AI summary] SKIPPED — OPENAI_API_KEY not set — "
+            f"root .env has key={st['root_env_has_key']}, "
+            f"backend .env has key={st['backend_env_has_key']}. "
+            f"Edit {st['root_env']} then restart uvicorn"
+        )
 
     add("Engineer Notes", "Narrative", engineer_notes)
     return rows, engineer_notes
@@ -2235,12 +2489,15 @@ def build_excel(result: dict[str, Any]) -> bytes:
 
 @app.get("/api/health")
 def health():
-    key = _refresh_openai_key()
+    status = _openai_key_status()
     return {
         "status": "ok",
         "app": "SteelDraw AI Extractor",
-        "openai_configured": bool(key),
-        "openai_model": os.getenv("OPENAI_MODEL", "gpt-4o-mini") if key else None,
+        "openai_configured": status["configured"],
+        "openai_model": os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        if status["configured"]
+        else None,
+        "openai": status,
         "env_files": {
             "root": str(_ROOT_ENV),
             "root_exists": _ROOT_ENV.exists(),
