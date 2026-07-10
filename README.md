@@ -5,7 +5,7 @@ AI-powered structural drawing takeoff application. Upload a PDF drawing, run a G
 ## Stack
 
 - **Backend:** FastAPI + Uvicorn
-- **Vision AI:** Google Gemini (`gemini-2.5-flash`) with structured JSON output
+- **Vision AI:** Google Gemini (`gemini-2.5-flash`) via the official `google-genai` SDK with structured JSON output
 - **PDF → Image:** `pdf2image` at 200 DPI (requires Poppler)
 - **Export:** pandas → Excel (`.xlsx`)
 - **Frontend:** HTML5 + Tailwind CSS + vanilla JavaScript (dark slate dashboard)

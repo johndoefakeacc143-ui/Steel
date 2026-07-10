@@ -15,12 +15,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-import google.generativeai as genai
 import pandas as pd
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
+from google import genai
+from google.genai import types
 from pdf2image import convert_from_bytes
 from pydantic import BaseModel, Field, field_validator
 
@@ -128,7 +129,7 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# Gemini helpers
+# Gemini helpers (google-genai SDK)
 # ---------------------------------------------------------------------------
 
 
@@ -141,29 +142,14 @@ def get_gemini_api_key() -> str:
     return GEMINI_API_KEY
 
 
-def configure_gemini() -> None:
-    """Configure the Google Generative AI client with the API key."""
+def build_gemini_client() -> genai.Client:
+    """Create a google-genai Client configured with the API key."""
     api_key = get_gemini_api_key()
     if not api_key:
         raise HTTPException(status_code=503, detail=MISSING_API_KEY_DETAIL)
-    genai.configure(api_key=api_key)
-    logger.info("Gemini API configured successfully.")
-
-
-def build_gemini_model() -> genai.GenerativeModel:
-    """Create a Gemini model configured for strict JSON structured output."""
-    configure_gemini()
-    generation_config = genai.GenerationConfig(
-        response_mime_type="application/json",
-        response_schema=TakeoffResult,
-        temperature=0.1,
-    )
-    model = genai.GenerativeModel(
-        model_name=GEMINI_MODEL_NAME,
-        generation_config=generation_config,
-    )
-    logger.info("Gemini model '%s' ready with structured JSON schema.", GEMINI_MODEL_NAME)
-    return model
+    client = genai.Client(api_key=api_key)
+    logger.info("Gemini client ready (model=%s, structured JSON schema enabled).", GEMINI_MODEL_NAME)
+    return client
 
 
 TAKEOFF_PROMPT = """You are an elite Structural Engineering Estimator performing an automated steel/structural takeoff.
@@ -195,16 +181,47 @@ def image_to_jpeg_bytes(pil_image) -> bytes:
 
 def analyze_drawing_pages(jpeg_pages: List[bytes]) -> TakeoffResult:
     """Send drawing page images to Gemini and parse structured takeoff JSON."""
-    model = build_gemini_model()
-    content_parts: list = [TAKEOFF_PROMPT]
+    client = build_gemini_client()
 
+    content_parts: list = [TAKEOFF_PROMPT]
     for index, jpeg_bytes in enumerate(jpeg_pages, start=1):
         content_parts.append(f"\n--- Drawing Page {index} of {len(jpeg_pages)} ---")
-        content_parts.append({"mime_type": "image/jpeg", "data": jpeg_bytes})
+        content_parts.append(
+            types.Part.from_bytes(data=jpeg_bytes, mime_type="image/jpeg")
+        )
         logger.info("Attached page %s (%s bytes) for Gemini analysis.", index, len(jpeg_bytes))
 
+    generation_config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=TakeoffResult,
+        temperature=0.1,
+    )
+
     logger.info("Sending %s page(s) to Gemini for deep structural scan...", len(jpeg_pages))
-    response = model.generate_content(content_parts)
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL_NAME,
+            contents=content_parts,
+            config=generation_config,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Gemini generate_content failed.")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Gemini API request failed: {exc}",
+        ) from exc
+
+    # Prefer the SDK's validated Pydantic parse when available.
+    if getattr(response, "parsed", None) is not None:
+        parsed_obj = response.parsed
+        if isinstance(parsed_obj, TakeoffResult):
+            result = parsed_obj
+        else:
+            result = TakeoffResult.model_validate(parsed_obj)
+        logger.info("Parsed %s structural items from Gemini response.parsed.", len(result.items))
+        return result
 
     raw_text = (response.text or "").strip()
     if not raw_text:
