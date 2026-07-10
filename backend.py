@@ -52,10 +52,11 @@ SAFE_FILENAME_PATTERN = re.compile(r"^takeoff_[a-zA-Z0-9_\-]+\.xlsx$")
 
 MISSING_API_KEY_DETAIL = (
     "GEMINI_API_KEY is not configured. "
-    "Create a free key at https://aistudio.google.com/apikey, then either: "
-    "(1) copy .env.example to .env and set GEMINI_API_KEY=your_key, or "
-    "(2) run: export GEMINI_API_KEY='your_key' — then restart the server."
+    "Create a free key at https://aistudio.google.com/apikey, then paste it "
+    "in the Setup Required box below (or add it to a .env file) and save."
 )
+
+ENV_FILE_PATH = BASE_DIR / ".env"
 # ---------------------------------------------------------------------------
 # Pydantic schemas — strict Structured JSON Output for Gemini
 # ---------------------------------------------------------------------------
@@ -134,12 +135,53 @@ app.add_middleware(
 
 
 def get_gemini_api_key() -> str:
-    """Return the current Gemini API key, re-reading env so .env reloads after restart."""
+    """Return the current Gemini API key, re-reading .env so UI saves apply immediately."""
     global GEMINI_API_KEY
-    # Prefer a live process env / .env value in case the server was restarted after setup.
-    load_dotenv(BASE_DIR / ".env", override=False)
+    # Override process env with .env so keys saved from the dashboard take effect
+    # without requiring a full server restart.
+    load_dotenv(ENV_FILE_PATH, override=True)
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+    # Treat placeholder values from .env.example as unset.
+    if GEMINI_API_KEY.lower() in {
+        "",
+        "your_google_gemini_api_key_here",
+        "your_key",
+        "your_real_key",
+        "your_api_key_here",
+    }:
+        GEMINI_API_KEY = ""
     return GEMINI_API_KEY
+
+
+def save_gemini_api_key(api_key: str) -> Path:
+    """Persist GEMINI_API_KEY to .env and the current process environment."""
+    global GEMINI_API_KEY
+    cleaned = api_key.strip().strip('"').strip("'")
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="API key cannot be empty.")
+    if cleaned.lower().startswith("your_") or "example" in cleaned.lower():
+        raise HTTPException(
+            status_code=400,
+            detail="That looks like a placeholder. Paste your real key from Google AI Studio.",
+        )
+
+    env_lines: list[str] = []
+    if ENV_FILE_PATH.exists():
+        for line in ENV_FILE_PATH.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("GEMINI_API_KEY="):
+                continue
+            env_lines.append(line)
+        # Keep a trailing blank line separation if the file had content.
+        while env_lines and env_lines[-1] == "":
+            env_lines.pop()
+
+    env_lines.append(f"GEMINI_API_KEY={cleaned}")
+    ENV_FILE_PATH.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
+
+    os.environ["GEMINI_API_KEY"] = cleaned
+    GEMINI_API_KEY = cleaned
+    logger.info("GEMINI_API_KEY saved to %s (length=%s).", ENV_FILE_PATH.name, len(cleaned))
+    return ENV_FILE_PATH
 
 
 def build_gemini_client() -> genai.Client:
@@ -150,6 +192,12 @@ def build_gemini_client() -> genai.Client:
     client = genai.Client(api_key=api_key)
     logger.info("Gemini client ready (model=%s, structured JSON schema enabled).", GEMINI_MODEL_NAME)
     return client
+
+
+class ApiKeyPayload(BaseModel):
+    """Request body for saving a Gemini API key from the dashboard."""
+
+    api_key: str = Field(..., min_length=10, description="Google AI Studio Gemini API key")
 
 
 TAKEOFF_PROMPT = """You are an elite Structural Engineering Estimator performing an automated steel/structural takeoff.
@@ -317,6 +365,21 @@ async def health_check() -> dict:
         "model": GEMINI_MODEL_NAME,
         "gemini_key_configured": key_configured,
         "setup_hint": None if key_configured else MISSING_API_KEY_DETAIL,
+    }
+
+
+@app.post("/configure-api-key/")
+async def configure_api_key(payload: ApiKeyPayload) -> dict:
+    """
+    Save a Gemini API key from the dashboard into .env and the live process.
+    No server restart is required after a successful save.
+    """
+    save_gemini_api_key(payload.api_key)
+    return {
+        "success": True,
+        "message": "API key saved. You can run AI Deep Scan now.",
+        "gemini_key_configured": True,
+        "status": "ok",
     }
 
 

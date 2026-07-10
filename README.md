@@ -35,21 +35,25 @@ AI-powered structural drawing takeoff application. Upload a PDF drawing, run a G
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-
-# Required: Google Gemini API key
-cp .env.example .env
-# Edit .env and set: GEMINI_API_KEY=your_real_key
-# Get a free key at https://aistudio.google.com/apikey
 ```
 
-Alternatively, export the key in your shell (then restart the server):
+### Gemini API key (required)
+
+1. Create a free key at [Google AI Studio](https://aistudio.google.com/apikey)
+2. Start the server, open the dashboard, and paste the key into the **Setup Required** box (saved to `.env` automatically — no restart needed)
+
+Or configure manually:
 
 ```bash
-export GEMINI_API_KEY="your_api_key_here"
+# Windows
+copy .env.example .env
+# Edit .env → GEMINI_API_KEY=your_real_key
+
+# macOS / Linux
+cp .env.example .env
 ```
 
-> If you see **“GEMINI_API_KEY is not configured”** in the UI, the key is missing from the process environment. Add it via `.env` or `export`, then restart Uvicorn.
-## Run
+> If you see **Setup Required**, the key is missing. Paste it in the UI or add it to `.env`.## Run
 
 ```bash
 uvicorn backend:app --host 0.0.0.0 --port 8000 --reload

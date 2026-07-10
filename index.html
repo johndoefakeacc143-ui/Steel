@@ -241,11 +241,32 @@
         <p id="setupBannerText" class="text-slate-200 text-sm mt-2 leading-relaxed">
           GEMINI_API_KEY is not configured. Create a free key at
           <a class="text-sky-300 underline hover:text-sky-200" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>,
-          then add it to a <code class="text-amber-100">.env</code> file and restart the server.
+          then paste it below and click Save. No server restart needed.
         </p>
-        <pre class="mt-3 text-xs text-slate-300 bg-slate-950/60 border border-slate-700/60 rounded-xl p-3 overflow-x-auto font-mono leading-relaxed">cp .env.example .env
+        <form id="apiKeyForm" class="mt-4 flex flex-col sm:flex-row gap-3">
+          <input
+            id="apiKeyInput"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Paste your Gemini API key here"
+            class="flex-1 rounded-xl bg-slate-950/70 border border-slate-600/80 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-400/70 focus:ring-1 focus:ring-sky-400/40 font-mono"
+          />
+          <button
+            id="saveApiKeyBtn"
+            type="submit"
+            class="btn-primary inline-flex items-center justify-center rounded-xl px-5 py-3 text-sm font-semibold text-white whitespace-nowrap"
+          >
+            Save API Key
+          </button>
+        </form>
+        <p id="apiKeyStatus" class="mt-2 text-xs text-slate-400 min-h-[1rem]"></p>
+        <details class="mt-3">
+          <summary class="text-xs text-slate-500 cursor-pointer hover:text-slate-300">Manual .env setup (optional)</summary>
+          <pre class="mt-2 text-xs text-slate-300 bg-slate-950/60 border border-slate-700/60 rounded-xl p-3 overflow-x-auto font-mono leading-relaxed">copy .env.example .env
 # edit .env → GEMINI_API_KEY=your_real_key
 uvicorn backend:app --host 0.0.0.0 --port 8000 --reload</pre>
+        </details>
       </div>
 
       <!-- Upload card -->
@@ -411,6 +432,10 @@ uvicorn backend:app --host 0.0.0.0 --port 8000 --reload</pre>
       const setupBanner = document.getElementById("setupBanner");
       const setupBannerText = document.getElementById("setupBannerText");
       const statusPill = document.getElementById("statusPill");
+      const apiKeyForm = document.getElementById("apiKeyForm");
+      const apiKeyInput = document.getElementById("apiKeyInput");
+      const saveApiKeyBtn = document.getElementById("saveApiKeyBtn");
+      const apiKeyStatus = document.getElementById("apiKeyStatus");
 
       let selectedFile = null;
       let geminiReady = true;
@@ -497,6 +522,52 @@ uvicorn backend:app --host 0.0.0.0 --port 8000 --reload</pre>
           statusPill.classList.remove("live");
         }
         refreshScanButton();
+      }
+
+      async function saveApiKey(event) {
+        event.preventDefault();
+        const key = (apiKeyInput.value || "").trim();
+        if (!key) {
+          apiKeyStatus.textContent = "Paste your Gemini API key first.";
+          apiKeyStatus.className = "mt-2 text-xs text-rose-300 min-h-[1rem]";
+          return;
+        }
+
+        saveApiKeyBtn.disabled = true;
+        apiKeyStatus.textContent = "Saving API key…";
+        apiKeyStatus.className = "mt-2 text-xs text-slate-400 min-h-[1rem]";
+
+        try {
+          const response = await fetch(API_BASE + "/configure-api-key/", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ api_key: key }),
+          });
+          let payload = null;
+          try {
+            payload = await response.json();
+          } catch (parseErr) {
+            throw new Error("Server returned a non-JSON response (HTTP " + response.status + ").");
+          }
+          if (!response.ok) {
+            const detail =
+              (payload && (payload.detail || payload.message)) ||
+              "Failed to save API key (HTTP " + response.status + ")";
+            throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+          }
+
+          apiKeyInput.value = "";
+          apiKeyStatus.textContent = payload.message || "API key saved.";
+          apiKeyStatus.className = "mt-2 text-xs text-emerald-300 min-h-[1rem]";
+          hideError();
+          await checkHealth();
+        } catch (err) {
+          console.error("Save API key failed:", err);
+          apiKeyStatus.textContent = err.message || "Failed to save API key.";
+          apiKeyStatus.className = "mt-2 text-xs text-rose-300 min-h-[1rem]";
+        } finally {
+          saveApiKeyBtn.disabled = false;
+        }
       }
 
       function isPdfFile(file) {
@@ -675,6 +746,8 @@ uvicorn backend:app --host 0.0.0.0 --port 8000 --reload</pre>
         previewSection.classList.add("hidden-block");
         loadingState.classList.add("hidden-block");
       });
+
+      apiKeyForm.addEventListener("submit", saveApiKey);
 
       checkHealth();
     })();
