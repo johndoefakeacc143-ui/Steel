@@ -41,8 +41,10 @@ BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "generated_exports"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# Load GEMINI_API_KEY from .env (if present) without overriding a real shell export.
-load_dotenv(BASE_DIR / ".env", override=False)
+# Load GEMINI_API_KEY from .env in the project root.
+# Shell exports still win when override=False; .env fills in when unset.
+ENV_FILE_PATH = BASE_DIR / ".env"
+load_dotenv(ENV_FILE_PATH, override=False)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL_NAME = "gemini-2.5-flash"
@@ -50,13 +52,21 @@ PDF_DPI = 200
 MAX_PAGES_TO_ANALYZE = 10
 SAFE_FILENAME_PATTERN = re.compile(r"^takeoff_[a-zA-Z0-9_\-]+\.xlsx$")
 
+PLACEHOLDER_API_KEYS = {
+    "",
+    "your_google_gemini_api_key_here",
+    "your_key",
+    "your_real_key",
+    "your_api_key_here",
+}
+
 MISSING_API_KEY_DETAIL = (
     "GEMINI_API_KEY is not configured. "
-    "Create a free key at https://aistudio.google.com/apikey, then paste it "
-    "in the Setup Required box below (or add it to a .env file) and save."
+    "1) Get a key at https://aistudio.google.com/apikey  "
+    "2) Copy .env.example to .env  "
+    "3) Set GEMINI_API_KEY=your_real_key in .env  "
+    "4) Restart the server (or run start.bat on Windows)."
 )
-
-ENV_FILE_PATH = BASE_DIR / ".env"
 # ---------------------------------------------------------------------------
 # Pydantic schemas — strict Structured JSON Output for Gemini
 # ---------------------------------------------------------------------------
@@ -135,69 +145,46 @@ app.add_middleware(
 
 
 def get_gemini_api_key() -> str:
-    """Return the current Gemini API key, re-reading .env so UI saves apply immediately."""
+    """
+    Load GEMINI_API_KEY from the process environment and project .env file.
+
+    Reloads .env on each call so editing .env + uvicorn --reload (or a restart)
+    picks up the key. Placeholder values from .env.example are treated as unset.
+    """
     global GEMINI_API_KEY
-    # Override process env with .env so keys saved from the dashboard take effect
-    # without requiring a full server restart.
-    load_dotenv(ENV_FILE_PATH, override=True)
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-    # Treat placeholder values from .env.example as unset.
-    if GEMINI_API_KEY.lower() in {
-        "",
-        "your_google_gemini_api_key_here",
-        "your_key",
-        "your_real_key",
-        "your_api_key_here",
-    }:
+
+    # Re-read .env so a newly created/edited file is visible after reload.
+    if ENV_FILE_PATH.exists():
+        load_dotenv(ENV_FILE_PATH, override=True)
+    else:
+        load_dotenv(ENV_FILE_PATH, override=False)
+
+    raw = os.getenv("GEMINI_API_KEY", "").strip().strip('"').strip("'")
+    if raw.lower() in PLACEHOLDER_API_KEYS:
         GEMINI_API_KEY = ""
+    else:
+        GEMINI_API_KEY = raw
     return GEMINI_API_KEY
 
 
-def save_gemini_api_key(api_key: str) -> Path:
-    """Persist GEMINI_API_KEY to .env and the current process environment."""
-    global GEMINI_API_KEY
-    cleaned = api_key.strip().strip('"').strip("'")
-    if not cleaned:
-        raise HTTPException(status_code=400, detail="API key cannot be empty.")
-    if cleaned.lower().startswith("your_") or "example" in cleaned.lower():
-        raise HTTPException(
-            status_code=400,
-            detail="That looks like a placeholder. Paste your real key from Google AI Studio.",
-        )
-
-    env_lines: list[str] = []
-    if ENV_FILE_PATH.exists():
-        for line in ENV_FILE_PATH.read_text(encoding="utf-8").splitlines():
-            if line.strip().startswith("GEMINI_API_KEY="):
-                continue
-            env_lines.append(line)
-        # Keep a trailing blank line separation if the file had content.
-        while env_lines and env_lines[-1] == "":
-            env_lines.pop()
-
-    env_lines.append(f"GEMINI_API_KEY={cleaned}")
-    ENV_FILE_PATH.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
-
-    os.environ["GEMINI_API_KEY"] = cleaned
-    GEMINI_API_KEY = cleaned
-    logger.info("GEMINI_API_KEY saved to %s (length=%s).", ENV_FILE_PATH.name, len(cleaned))
-    return ENV_FILE_PATH
-
-
 def build_gemini_client() -> genai.Client:
-    """Create a google-genai Client configured with the API key."""
+    """Create a google-genai Client configured with the API key from .env / env."""
     api_key = get_gemini_api_key()
     if not api_key:
+        env_exists = ENV_FILE_PATH.exists()
+        logger.error(
+            "Gemini API key missing. .env exists=%s path=%s",
+            env_exists,
+            ENV_FILE_PATH,
+        )
         raise HTTPException(status_code=503, detail=MISSING_API_KEY_DETAIL)
     client = genai.Client(api_key=api_key)
-    logger.info("Gemini client ready (model=%s, structured JSON schema enabled).", GEMINI_MODEL_NAME)
+    logger.info(
+        "Gemini client ready (model=%s, key_loaded=True, key_length=%s).",
+        GEMINI_MODEL_NAME,
+        len(api_key),
+    )
     return client
-
-
-class ApiKeyPayload(BaseModel):
-    """Request body for saving a Gemini API key from the dashboard."""
-
-    api_key: str = Field(..., min_length=10, description="Google AI Studio Gemini API key")
 
 
 TAKEOFF_PROMPT = """You are an elite Structural Engineering Estimator performing an automated steel/structural takeoff.
@@ -364,22 +351,8 @@ async def health_check() -> dict:
         "service": "NEXT-GEN PRO Structural Takeoff",
         "model": GEMINI_MODEL_NAME,
         "gemini_key_configured": key_configured,
+        "env_file_found": ENV_FILE_PATH.exists(),
         "setup_hint": None if key_configured else MISSING_API_KEY_DETAIL,
-    }
-
-
-@app.post("/configure-api-key/")
-async def configure_api_key(payload: ApiKeyPayload) -> dict:
-    """
-    Save a Gemini API key from the dashboard into .env and the live process.
-    No server restart is required after a successful save.
-    """
-    save_gemini_api_key(payload.api_key)
-    return {
-        "success": True,
-        "message": "API key saved. You can run AI Deep Scan now.",
-        "gemini_key_configured": True,
-        "status": "ok",
     }
 
 
@@ -493,5 +466,15 @@ async def download_excel(file_name: str) -> FileResponse:
 if __name__ == "__main__":
     import uvicorn
 
-    logger.info("Starting NEXT-GEN PRO Structural Takeoff server on http://0.0.0.0:8000")
+    key_ok = bool(get_gemini_api_key())
+    logger.info(
+        "Starting NEXT-GEN PRO on http://0.0.0.0:8000 | .env=%s | GEMINI_API_KEY=%s",
+        "found" if ENV_FILE_PATH.exists() else "missing",
+        "configured" if key_ok else "NOT SET",
+    )
+    if not key_ok:
+        logger.warning(
+            "Create .env from .env.example, set GEMINI_API_KEY, then restart. "
+            "On Windows you can run start.bat"
+        )
     uvicorn.run("backend:app", host="0.0.0.0", port=8000, reload=True)

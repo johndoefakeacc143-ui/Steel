@@ -16,8 +16,9 @@ AI-powered structural drawing takeoff application. Upload a PDF drawing, run a G
 .
 ├── backend.py          # FastAPI application
 ├── index.html          # Dashboard UI
+├── start.bat           # Windows launcher (loads .env + starts server)
 ├── requirements.txt    # Python dependencies
-├── .env.example        # API key template
+├── .env.example        # API key template (copy to .env)
 └── generated_exports/  # Generated Excel files (created at runtime)
 ```
 
@@ -26,47 +27,82 @@ AI-powered structural drawing takeoff application. Upload a PDF drawing, run a G
 1. **Python 3.10+**
 2. **Poppler** (required by `pdf2image`)
    - Ubuntu/Debian: `sudo apt-get install -y poppler-utils`
+   - Windows: install Poppler and add its `bin` folder to PATH
    - macOS: `brew install poppler`
 3. **Google Gemini API key** from [Google AI Studio](https://aistudio.google.com/apikey)
 
-## Setup
+## Setup (enable the Gemini API via `.env`)
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+# Windows:
+.venv\Scripts\activate
+# macOS / Linux:
+source .venv/bin/activate
+
 pip install -r requirements.txt
 ```
 
-### Gemini API key (required)
+### 1. Create `.env`
 
-1. Create a free key at [Google AI Studio](https://aistudio.google.com/apikey)
-2. Start the server, open the dashboard, and paste the key into the **Setup Required** box (saved to `.env` automatically — no restart needed)
-
-Or configure manually:
-
-```bash
-# Windows
+```bat
+REM Windows
 copy .env.example .env
-# Edit .env → GEMINI_API_KEY=your_real_key
-
-# macOS / Linux
-cp .env.example .env
+notepad .env
 ```
 
-> If you see **Setup Required**, the key is missing. Paste it in the UI or add it to `.env`.## Run
+```bash
+# macOS / Linux
+cp .env.example .env
+nano .env
+```
+
+### 2. Put your real key in `.env`
+
+```env
+GEMINI_API_KEY=AIzaSyYourRealKeyHere
+```
+
+Rules that matter:
+
+- No quotes around the key
+- No spaces around `=`
+- Do not leave the placeholder `your_google_gemini_api_key_here`
+
+### 3. Start the server
+
+**Windows (recommended):** double-click or run:
+
+```bat
+start.bat
+```
+
+`start.bat` loads `GEMINI_API_KEY` from `.env` and starts Uvicorn.
+
+**Or manually:**
 
 ```bash
 uvicorn backend:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Open **http://127.0.0.1:8000** in your browser.
+Open **http://127.0.0.1:8000**
+
+If the amber **Setup Required** banner still appears, your `.env` key is missing/placeholder — fix `.env`, then **fully stop** the server (Ctrl+C) and start again.
+
+Check status:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+You want `"gemini_key_configured": true` and `"env_file_found": true`.
 
 ## API
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/` | Serves the dashboard UI |
-| `GET` | `/health` | Health check |
+| `GET` | `/health` | Health check + whether `.env` key loaded |
 | `POST` | `/upload-drawing/` | Upload PDF → AI takeoff → Excel |
 | `GET` | `/download/{file_name}` | Download generated `.xlsx` |
 
@@ -97,3 +133,4 @@ Open **http://127.0.0.1:8000** in your browser.
 - Multi-page PDFs are supported (first 10 pages analyzed by default).
 - CORS is fully enabled for local frontend development.
 - Generated Excel files are stored under `generated_exports/` and served only when the filename matches a safe pattern.
+- Never commit your real `.env` file (it is gitignored).
