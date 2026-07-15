@@ -19,10 +19,13 @@ OCR-based takeoff tool for **steel structure drawings**. Upload a PDF, scanned P
 
 ## How it works
 
-1. **Read** — digital text via pdfplumber; scanned pages rendered and OCR’d with Tesseract (OpenCV preprocessing)
-2. **Trace** — regex extractors find member marks (`B1`, `C2`, `BP1`), section sizes (`W18x35`, `ISMB300`, …), quantities, and plate sizes
-3. **Aggregate** — duplicate marks merged; quantities summed
-4. **Export** — styled `.xlsx` with sheets **Beam**, **Columns**, **Base Plate**
+**Every upload is scanned fresh.** Nothing is hardcoded from a previous drawing.
+
+1. **Digital text** — pdfplumber counts marks on the text layer (when present)
+2. **High-capacity OCR** — page rendered at high DPI, tiled, multi-pass Tesseract; reads marks and nearby dimensions (including graphics-only labels like some braces)
+3. **Diagonal braces** — length \(L=\sqrt{a^2+b^2}\) from nearby horizontal run × vertical rise
+4. **Optional vision** — if `OPENAI_API_KEY` or `GEMINI_API_KEY` is set, a vision model also reads the sheet like a human and fills OCR gaps
+5. **Export** — `.xlsx` with **Beam**, **Columns**, **Base Plate** (Member Name, Quantity, Size). Same mark at different lengths → separate rows
 
 ## Prerequisites
 

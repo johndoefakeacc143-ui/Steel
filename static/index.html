@@ -303,8 +303,9 @@
         <h1>Steel<span>OCR</span></h1>
       </div>
       <p class="tagline">
-        Read steel structure PDFs and drawings with OCR. Trace beams, columns,
-        and base plates — export to Excel.
+        Every upload is scanned fresh with OCR (optional vision assist).
+        No hardcoded takeoffs — marks, quantities, and sizes come from
+        <em>this</em> drawing only. Export Beam, Columns, and Base Plate to Excel.
       </p>
     </header>
 
@@ -502,7 +503,7 @@
       if (!selectedFile) return;
       runBtn.disabled = true;
       progress.classList.add("active");
-      setStatus("Running OCR and tracing members… this can take a minute for large scans.");
+      setStatus("Scanning this drawing with OCR (fresh takeoff)… large PDFs can take a few minutes.");
 
       const form = new FormData();
       form.append("file", selectedFile);

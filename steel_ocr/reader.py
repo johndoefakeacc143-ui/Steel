@@ -18,7 +18,7 @@ from steel_ocr.preprocess import pil_to_bgr, preprocess_for_ocr, preprocess_vari
 logger = logging.getLogger("steel_ocr.reader")
 
 DIGITAL_TEXT_THRESHOLD = 40
-DEFAULT_DPI = int(os.getenv("OCR_DPI", "250"))
+DEFAULT_DPI = int(os.getenv("OCR_DPI", "320"))
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 PDF_EXTENSIONS = {".pdf"}
 

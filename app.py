@@ -91,10 +91,16 @@ def health() -> dict:
     except Exception as exc:  # noqa: BLE001
         tesseract_version = str(exc)
 
+    from steel_ocr.spatial import OCR_DPI
+    from steel_ocr.vision import vision_available
+
     return {
         "status": "ok",
         "tesseract_ok": tesseract_ok,
         "tesseract_version": tesseract_version,
+        "ocr_dpi": OCR_DPI,
+        "vision_assist": vision_available(),
+        "mode": "scan-each-upload (OCR + optional vision; no hardcodes)",
         "accepted_types": sorted(ALLOWED_SUFFIXES),
         "excel_sheets": ["Beam", "Columns", "Base Plate"],
         "sheet_columns": ["Member Name", "Quantity", "Size"],
