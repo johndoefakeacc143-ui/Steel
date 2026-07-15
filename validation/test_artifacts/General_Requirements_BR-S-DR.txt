@@ -1,0 +1,1312 @@
+General Requirements (BR-S-DR)
+Requirement and Description
+BRS-DR-005	Display the Protocol number [R1979-ONC-2105] in BioREAD from the Read Project Name field stored in the ReadProject table within the project selection screen.
+BRS-DR-041	The system must display the data via the BiopsyReport form (uploaded at the baseline/screening time point) in BioPACS if available in Session 3: Global and Session 4: Adjudication.
+Reader Allocation (BR-S-RA)
+Requirement	Requirement Description
+BRS-RA-005	A case is selected for adjudication if discrepant between the two primary readers when the answers do not match exactly for the following:
+ 
+Difference in any TPR [control names: FinalTimePointResponsePET, FinalTimePointResponseCT and/or FinalTimePointResponseCTPET] at any and all time points. 
+Technical Adequacy (BR-S-TAA)
+Requirement	Requirement Description
+BRS-TAA-005	The system must ask the following question in Sessions 1 & 2:
+•	Question: Give at least one reason for the images being Readable, but not Optimal, or Not Readable.
+[control name: ImageAdequacyReason]
+Answer Options
+•	Artifact
+•	Inadequate contrast
+•	Inadequate brain
+•	Inadequate neck
+•	Inadequate chest
+•	Inadequate abdomen
+•	Inadequate pelvis
+•	Inadequate PET Whole Body
+•	Missing brain
+•	Missing neck
+•	Missing chest
+•	Missing abdomen
+•	Missing pelvis
+•	Missing PET Whole Body
+•	Site drawn ROI/measurement present
+•	Subject motion
+•	Time point missing
+•	Other, specify	Logic
+    One answer required, multiple allowed when enabled.
+•	If there are no image files for the time point, the system must auto-populate answer option of ‘Time point missing’.
+•	If there is at least one image available for the time point, the system must disable the answer option ‘Time point missing’.
+•	If PET images are loaded for the time point hide answer option ‘Missing PET Whole Body’. 
+•	If there is no PET image available for the time point, the system must auto-populate ‘Missing PET Whole Body’ and allow reader to select additional options.
+o	Auto-populate PET status and Background status to ‘Not Present, Images not Available. 
+•	Enable a required text comment box if ‘Other, specify’ is selected. [control name: OtherSpecify]
+Lesion Labeling/Tracking
+Requirement	Requirement Description
+BRS-LLT-005	When Extranodal site location ‘Muscle’ or ‘Soft Tissue’ or ‘Subcutis’ (Index/Target, Non-Index/Non-Target and New/PET (P1)) is selected require response for:
+‘Muscle/Soft Tissue/Subcutis, specify’ with the following options:
+•	Abdominal Left upper quadrant 
+•	Abdominal Left lower quadrant
+•	Abdominal Right upper quadrant
+•	Abdominal Right lower quadrant
+•	Upper Arm Left
+•	Upper Arm Right
+•	Forearm Left
+•	Forearm Right
+•	Elbow Left
+•	Elbow Right
+•	Axilla Left
+•	Axilla Right
+•	Hand Left
+•	Hand Right
+•	Lower Leg Left
+•	Lower Leg Right
+•	Thigh Left
+•	Thigh Right
+•	Knee Left
+•	Knee Right
+•	Foot Left	•	Foot Right
+•	Forehead Left
+•	Forehead Right
+•	Above the eyebrow
+•	Nose Left
+•	Nose Right
+•	Around the mouth
+•	Cheek Left
+•	Cheek Right
+•	Upper Back Left
+•	Upper Back Right
+•	Lower Back Left
+•	Lower Back Right
+•	Buttock Left
+•	Buttock Right
+•	Chest Left
+•	Chest Right
+•	Chin
+•	Head
+•	Inguinal Region 
+•	Neck
+
+Target Lesions (BR-S-ILL)
+Requirement	Requirement Description
+BRS-ILL-015	The context menu when adding an Target lesion in Session 1, must include response for ‘Previously Irradiated?’ with the following answer options:
+•	No 
+•	Yes
+•	Yes, with progression
+Default the answer to No, allowing the reader to edit.
+If ‘No’ allow the lesion to be added
+If ‘Yes’ do not allow the lesion to be added, display following message:
+•	‘Previously irradiated lesion can only be selected as a non-target lesion. Please reassign the lesion as a non-target. 
+Change is required
+Note: Response is carried over to all sequential time points in Session 2.
+[control name: PreviouslyIrradiated]
+BRS-ILL-025	The eCRF must provide a context menu to assign an Index/Target lesion label as ‘missing; or ‘resolved’ in Session 2.
+•	Do not provide the option ‘Not present, resolved’ if there is no CT or MR images available for the time point.
+BRS-ILL-055	Index/Target with the status of ‘Merged-Not Present [label] must not count as missing when determining time point response. LDi/SDi will be defaulted to ‘0’ this is not a calculation.
+
+
+
+
+
+Non Target Lesions (BR-S-NIL)
+Requirement	Requirement Description
+BRS-NIL-015	The context menu when adding a Non-Target lesion in Session 1, must include response for ‘Previously Irradiated?’ with the following answer options:
+•	No 
+•	Yes 
+•	Yes, with progression
+Default the answer to No, allowing the reader to edit.
+Note: Response is carried over to all sequential time points in Session 2.
+[control name: PreviouslyIrradiated]
+BRS-NIL-025	The eCRF must provide a context menu to assign a Non-Index/Non-Target lesion label as ‘missing; or ‘resolved’ in Session 2.
+•	Do not provide the option ‘Not present, resolved’ if there is no CT or MR images available for the time point.
+
+New Lesions (BR-S-NLL)
+Requirement	Requirement Description
+BRS-NLL-020	The eCRF must provide a context menu to label a ROI saved to the RT struct file in MIM as New Lesion (nodal/extranodal) when threshold measurements are met in follow-up time points (Session 2).
+BRS-NLL-021	The eCRF must provide a context menu to label a ROI saved to the RT struct file in MIM as New Lesion (extranodal) in follow-up time points (Session 2). Upon adding a lesion that is < 10mm in LDi display the following message:
+•	New extranodal lesions may be of any size if it is certain that they are new and due to lymphoma, but it is recommended to wait until a lesion has reached  >10 mm to be certain. (OK)
+Reader must click ‘OK’ to acknowledge/close the message, no change is required. 
+Spleen Scan Interval (BR-S-SSI)
+Requirement	Requirement Description
+BRS-SSI-005	The reader will perform the following tasks in order, for BioREAD to capture the spleen first and last slice number:
+•	Select the 2D Brush Tool in MIM
+•	Create a ROI on the image
+•	Name the ROI SpleenFS (control name: SpleenFirstSlice) for spleen first or SpleenLS (control name: SpleenLastSlice) for spleen last.
+•	Assign the ROI within MIM to either the first or last slice identifier.
+•	Create the second ROI on the image and repeat the process above.
+After the above steps are completed for the first and last spleen slice, the eCRF will display the spleen slice numbers and calculate the LVD.
+BRS-SSI-035	Application must store the following location values (blank if LVD = n/a) to a hidden field within the database:
+1.	First slice location (Control Name: SpleenFirstSliceLocation)
+2.	Last slice location (Control Name: SpleenLastSliceLocation)
+3.	Next to last slice location (last slice – 1) (Control Name: SpleenNextToLastSliceLocation)
+4.	Spleen slice thickness: (absolute difference-SpleeNextToLastSliceLocation-SpleenLastSliceLocation) (control name: SpleenSliceThickness)
+
+Tracking Panels (BR-S-LC)
+Note: Tracking panels in template for Session 2 will remain as is, with the few modifications defined  below. Tracking panels for Target, Non-Target, and TPS panels in Session 3 will have additional/removed values and is defined in the modifications section under Global. Note: panel for New Lesion, PET Evaluation and Spleen have no modification is same in both sessions. 
+
+Requirement	Requirement Description
+BRS-LC-001	The system must produce and display an <Target> Lesion Calculation Summary for CT/MR Lesions in Sessions 2, and 3: 
+•	Time point (mask as appropriate)
+•	Lesion label
+•	Location 
+•	Slice number of ROI
+•	Actual LDi (mm) Actual Longest Diameter (LDi) from an ROI, (rounded to <2> decimal precision) 
+•	Final LDi (mm) -Actual LDi with default applied, (rounded to <0> decimal precision) 
+•	Actual SDi (mm) Actual Shortest Diameter (SDi) from an ROI, (rounded to <2> decimal precision) .
+•	Final SDi (mm) Actual SDi with default applied, (rounded to <0> decimal precision) 
+•	Final PPD (mm) sum of final cross product (LDi x SDi) defaults applied (rounded to <0> decimal precision) 
+•	Absolute Change Nadir LDi (mm) Calculated change in LDi from the smallest value PPD across time points (Current LDi – nadir LDi) (Current LDi – LDi of the nadir PPD) (rounded to <0> decimal precision) Populate with n/a if lesion is ‘missing’ in the current time point, populate with n/a in the present and all subsequent time point if the lesion has merged.
+•	Absolute Change Nadir SDi (mm) Calculated change in SDi from the smallest value across time points (Current SDi – nadir SDi) (Current SDi – SDi of the nadir PPD) (rounded to <0> decimal precision) Populate with n/a if lesion is ‘missing’ in the current time point, populate with n/a in the present and all subsequent time point if the lesion has merged
+•	% Change Screening PPD Calculated percent change in cross product of an ROI since screening % = [(Current PPD – Screening PPD) / Screening PPD)*100] , (rounded to <1> decimal precision) Populate with n/a if lesion is missing in the current time point.
+•	% Change Nadir PPD Calculated percent change in PPD drawn at the current time point and smallest measurement of the same ROI drawn at any other time point. [(Current PPD – Nadir PPD)/Nadir PPD) *100], (rounded to <1> decimal precision) Populate with n/a if lesion is ‘missing’ in the current time point. 
+•	Lesion Status 
+•	PET Assessment (Positive, Negative, Not Evaluable) 
+BRS-LC-040	Provide an informational panel labeled ‘Muscle/Soft Tissue/Subcutis Specify’ with the following parameters in Sessions 2, 3, 4 and 5 when site location ‘Muscle’ or ‘Soft Tissue’ or ‘Subcutis’ is added, else hide:
+•	Label (lesion label)
+•	Location (Muscle or Soft Tissue or Subcutis)
+•	Specify (recorded response for ‘Muscle/Soft Tissue/Subcutis, specify’ )
+
+Requirement	Requirement Description
+BRS-TPS-001	The system must produce and display a Timepoint Summary Panel for CT evaluation in Sessions 2, and 3: 
+•	Time point (mask as appropriate)
+•	Min Exam Date
+•	Max Exam Date
+•	CT <Target> Response
+•	CT <Non-Target> Response
+•	Number of new CT lesions (added in the current time point)
+•	Spleen Status
+•	Spleen Response
+•	CT Time Point Response
+•	PET+CT Time Point Response
+•	Designated PET+CT Time Point Response
+•	Comment on change of PET+CT TPR
+•	Reason for Reassessment
+•	Follow-up time point comment (leave blank if no comment)
+BRS-TPS-005
+	The system must produce and display a Timepoint Summary Panel for PET evaluation in Sessions 2, and 3: 
+•	Time point (mask as appropriate)
+•	Min Exam Date
+•	Max Exam Date
+•	Evidence of bone marrow involvement (for on-study time points)
+•	Five-Point Scale (for on-study time points)
+•	Qualitative combined changes in overall intensity
+•	PET Time Point Response 
+•	Designated PET Time Point Response
+•	Comment on change of PET TPR
+•	Reason for Reassessment
+Follow-up time point comment (leave blank if no comment)
+Session 1 Questions/Answers (BR-S-S1QA)
+Requirement and Description
+BRS-S1QA-000a Field Text:  Indicate the subjects FDG-avidity
+[Control name: IndicateFDGAvidity]
+Rule	Answer Option	Logic
+Ask this question if Optimal or Readable, but not optimal is selected for technical adequacy. 
+Default to <FDG-Avid> <Non FDG-Avid>  NE with technical adequacy value of ‘Not Readable’ selected at the Screening time point or PET imaging is not present at the screening time point.
+Prevent the reader from identifying any PET or CT ROIs if this question does not have a value.  If the reader attempts to add an ROI prior to answering this question, display error message:
+•	“FGD-Avidity answer is required.”	•	FDG-Avid
+•	Non FDG-Avid
+•	NE (non-selectable)
+
+
+
+	One required answer.
+
+When PET Image is available, and TAA is other than ‘Not Readable’: Require PET Positive lesion (P1) present if the subject is deemed ‘FDG-Avid’ prevent sign off if this is not met display error message:
+•	FDG-Avid subjects require PET Positive lesion to be added.
+
+
+
+
+Requirement and Description
+BRS-S1QA-002 Field text: Is there evidence of bone marrow involvement?
+[Control name: EvidenceBoneMarrow]
+Rule	Answer Option	Logic
+Ask this question if ‘Optimal’ or ‘Readable, but not optimal’ is selected for technical adequacy.
+Populate and disable to ‘Not Evaluable (PET not available or very bad quality)’ with ‘Not Readable’ for technical adequacy.
+Populate and disable to ‘Not Evaluable (PET not available or very bad quality)’ if no PET imaging is present.	•	No evidence of FDG avid disease in the marrow (negative)
+•	Diffuse FDG uptake, believed to be benign (negative)
+•	Focal FDG avid disease in the bone marrow (positive)
+•	Not Evaluable (PET not available or very bad quality)	One answer required.
+Upon sign off if answer option is ‘Focal FDG avid disease in bone marrow (positive)’ and the subject is deemed Non FDG-avid prevent sign off and display the following message:
+•	Subjects deemed Non FDG-avid may not have a positive bone marrow assessment. Please re-evaluate your assessment. 
+(Ok)
+Reader must click ‘Ok’ to close the message, change is required
+Note: if not auto-populated to ‘Not Evaluable (PET not available or very bad quality)’ based on rules – is a selectable option.
+
+ Session 2 Follow Up Lesion Measurements (BR-S-LM)
+Requirement	Requirement Description
+BRS-LM-035	Index/Target lesions on-study, which decrease to less than five (5) mm in any dimension (LDi and/or SDi), will be categorized as TSTM.  The lesion, node or mass will be assigned a measurement of 5 mm for the axis (LDi and/or the SDi) that falls below the TSTM threshold of 5 mm, with the exception of BR-S-LM-036.
+This rule also applies to Index/Target lesions that split, and the fragment(s) that fall below the TSTM threshold of 5mm.
+For Example: A lesion that previously measured 18 mm  15 mm decreased to 4 mm  4 mm.  Assign TSTM and 5 mm  5 mm will be recorded for the purpose of calculating the area.  If only one (1) axis fell below the TSTM threshold, only that measurement will be recorded as TSTM (e.g., if the same lesion decreased in size to 10 mm  4 mm, it would be recorded as 10 mm  5 mm).
+BRS-LM-036	When assigning a nodal/extranodal lesion in Session 2, context menu must include this question when the response diameter (LDi and/or SDi) has a threshold value >0 mm and <5 mm:
+•	Was the lesion reliably measured?  Yes/No
+If ‘Yes’ selected:
+•	Apply the true LDi and/or SDi
+If ‘No’ selected, follow the TSTM requirement below (BR-S-LM-035).
+[control name: ReliablyMeasured]
+Below modifications for ROI Status are related to BR-S-MSI-001 CT Index/Target Nodal/Extranodal (Tn) based on this question.
+
+	
+Time
+point	LDi (mm)	Type	Default LDi (mm)	SDi (mm)	Default SDi (mm)	ROI Status
+F/U	>0 and <5	Nodal	5
+reliably measured = No	>0 and <5	5
+reliably measured = No	Present and Normal (TSTM)
+F/U	>5	Nodal	---	>0 and <5	5
+reliably measured = No	Present and Normal (TSTM)
+F/U	>0 and <5	Nodal
+	---
+reliably measured = Yes	>0 and <5	---
+reliably measured = Yes	Present and Normal 
+F/U	>5	Nodal	---	>0 and <5	---
+reliably measured = Yes	Present and Normal 
+F/U	>0 and <5	Extranodal	5
+reliably measured = No	>0 and <5	5
+reliably measured = No	Present (TSTM)
+F/U	>5	Extranodal	---	>0 and <5	5
+reliably measured = No	Present (TSTM)
+F/U	>0 and <5	Extranodal	---
+reliably measured = Yes	>0 and <5	---
+reliably measured = Yes	Present 
+F/U	>5	Extranodal	---	>0 and <5	---
+reliably measured = Yes	Present 
+Follow Up Evaluation CT/MR Target Lesions
+Requirement	Requirement Description	CT Index Response
+BRS-CICR-001	All extranodal Index/Target lesions must be Not Present/Resolved and all nodal Index lesions have an LDi ≤ 15 mm. 	CR
+BRS-CIPR-001	% SPD Change from Screening must decrease by ≥50% compared to screening/baseline time point, and criteria for CR, PD or NE is not met.	PR
+BRS-CISD-001	Populate with SD if all other criteria (CR, PR, PD, NE or NA) have not been met. 	SD
+BRS-CIPD-001	An Index/Target Response of PD is derived based on a single lesion instance, and not on the lesion sums.
+BRS-CIPD-005	In order to have a response of PD, an individual lesion (node or extranodal) must meet the following three (3) conditions:
+1.	The lesion must be considered abnormal (the lesion must have an LDi of > 15 mm).
+2.	The lesion must have a ≥ 50% increase in PPD from nadir.
+Note: If nadir PPD is 0 and PPD at current time point is numeric and non-zero then condition 2 is considered true.
+3.	If LDi or SDi of the lesion at nadir time point is ≤ 20 mm, it must have increased by 5 mm from nadir LDi or nadir SDi.
+OR
+If LDi or SDi of the lesion at nadir time point is > 20 mm, it must have an increased by 10 mm from nadir LDi or nadir SDi.
+Note: Nadir time point for a lesion is the time point with lowest PPD of all prior time points. Condition 3 should be met for at least LDi or SDi. (LDi is compared to LDi, SDi is compared to SDi)
+Note: for split lesions, the sums of LDi/SDi (PPD) should be included when compared to nadir, not individual values.
+Note: for lesions that merge, the application must add the PPD of the two (or more) lesions that have merged at the current time point and all prior timepoints to determine the nadir time point of the combined lesions, when calculating PD response. 
+•	When lesions merge and lesion is considered abnormal (#1) and the 50% increase (#2) is met the LDi or SDi increase (#3) is not required to derive PD. 
+o	LDi and SDi increase (#3) will no longer apply to the lesions in all subsequent time points once merged regardless if they are no longer merged.	PD
+BRS-CIPD-010	Any one Extranodal lesion resolves and at a subsequent time point is re-assigned (status of Present) and measures >10mm in LDi. 	PD
+BRS-CINE-001	Populate with ‘NE’ when the time point is marked ‘Not Readable’, and Index/Target lesions were present at screening/baseline time point.	NE
+BRS-CINE-005	The system must enforce; a response of NE will be assigned if the PPD of at least one 1 Index/Target lesion is not evaluable and criteria for PD is not met.	NE
+BRS-CINA-001	Populate with ‘NA’ when no Index/Target disease is identified on the screening/baseline time point, and the current time point is not ‘Not Readable’.	NA
+Spleen Assessment
+Requirement	Requirement Description	Spleen Response
+Calculate the response in the following order: NE (if NR), NC, CR, PD, NE, PR, SD
+BRS-SR-000	The Spleen Nadir  is defined as the smallest LVD value including screening, up to but not including the current time point being assessed.
+BRS-SR-001	The Spleen Response will be based on the first time point a spleen measurement is assessable (e.g., if the spleen is unevaluable at Screening and TP1, but a measurement can be made at TP2 onwards, then the spleen response for all subsequent time points will use the spleen measurement from TP2 for Reference time point. 
+BRS-SR-002	Spleen response may require the spleen to be designated as ‘abnormal’ or ‘normal’ at current time, at reference or nadir time point:
+•	A spleen with an LVD > 130 will be considered abnormal
+•	A spleen with an LVD ≤ 130 mm will be considered normal
+BRS-SR-003	The reader can edit an ‘Enlarged’ Spleen Status (control name: SpleenAssessment) to ‘Normal’ as detailed within the requirement. 
+Once the Spleen Status has been updated, the Spleen designation will be ‘Normal’ and take precedence over the measurement designation noted in BR-S-SR-002.
+BRS-SRCR-001	An abnormal spleen (ASV > 0 mm) at Reference time point has regressed to normal size (i.e., LVD ≤ 130 mm).	CR
+BRS-SRCR-002	An abnormal spleen at nadir was assessed at a prior time point and the reader changes the Spleen Status (SpleenAssessment) from ‘Enlarged’ to ‘Normal’ in the current time point.	CR
+BRS-SRPR-001	An abnormal spleen at Reference time point remains abnormal, but the ASV has regressed by > 50% from the Reference time point.	PR
+BRS-SRSD-001	An abnormal spleen at Reference time point remains abnormal, but the requirements for neither PR nor PD have been met.	SD
+BRS-SRPD-020	A normal spleen at nadir that has become abnormal (LVD >130) and has increased by ≥20 mm in LVD compared to nadir.	PD
+BRS-SRPD-025	An abnormal spleen at nadir that has increased by >50% in ASV compared to nadir and has increased by ≥10mm in LVD.	PD
+BRS-SRNE-001	Populate with ‘NE’ when the time point is marked Not Readable.	NE
+BRS-SRNE-005	The system must enforce the spleen is “Not Present due to technical issues”, or “Not Present – images not available” at any time point will result in NE.	NE
+BRS-SRNE-010	The system must enforce for the spleen once a measurement has been recorded at prior time point and in the current time point has status of “Not Present, Surgery” results in NE.	NE
+BRS-SRNE-015	If the spleen cannot be measured at screening (e.g., if the spleen is unevaluable at Screening) and the spleen is abnormal at the first on-study time point measurement is recorded (> 130 mm), the Spleen Response will be reported as NE. 	NE
+BRS-SRNC-001	A normal spleen at Reference time point remains normal.	NC
+BRS-SRNC-005	Screening evaluation could not be made, but the spleen is considered normal (≤ 130 mm) at the first on-study time point where a measurement can be recorded, or reader changes status from ‘Enlarged’ to ‘Normal’.	NC
+BRS-SRNC-010	If the spleen is normal at the Reference time point and becomes abnormal but does not meet PD criteria at the current time point, the Spleen Response will be reported as No Change (NC). 	NC
+BRS-SRNC-015	Spleen has a status of ‘Not Present, surgery’ at screening time point.	NC
+BRS-SRNC-020	Screening evaluation could not be made, and the Spleen is deemed ‘Not Present, surgery’ at the first assessable on-study time point.	NC
+
+
+
+
+
+
+Session 2: Data Display
+Requirement	Requirement Description
+BRS-S2DD-025
+
+Note: values are derived, displayed and needed for export, but are not used for response is for reader review only	Display the following information for the Most FDG-avid Lesion (P1):
+•	Lesion 
+•	SUVmax [control name: WorstLesionsSUVmax]
+•	% Change SUVmax Screening  [control name: PerChangeSUVmaxFromScreening]
+•	% Change SUVmax Nadir [control name: PerChangeSUVmaxFromNadir]
+Calculate the percent change in the SUVmax of the Most FDG-avid Lesion:
+•	compare to the SUVmax of the PET lesion at screening for decrease 
+compared to the SUVmax of the PET lesion at nadir for response = PMD (configuration <SUVmaxPercentChange> = 2)
+The SUVmax for the worst case/most FDG-avid lesion will be determined at each time point. For each post-Screening time point, the percent change in the SUVmax (%ΔSUVmax) will be calculated for the worst case lesion according to the following equation:
+ 
+Auto-populate with ‘NE’ when PET lesion is identified, and no SUV values are carried over from imaging
+
+Requirement and Description
+BRS-S2QA-002 Field text: Is there evidence of bone marrow involvement?
+ [Control name: EvidenceBoneMarrow]
+Rule	Answer Option	Logic
+Ask this question if Optimal or Readable, but not optimal is selected for technical adequacy.
+Populate and disable to ‘Not Evaluable (PET not available or very bad quality)’ with ‘Not Readable’ for technical adequacy.
+Populate and disable to ‘Not Evaluable (PET not available or very bad quality)’ if no PET imaging is present.	•	No evidence of FDG avid disease in the marrow (negative)
+•	Diffuse FDG uptake, believed to be benign (negative)
+•	Focal FDG avid disease in the bone marrow (positive)
+•	New or recurrent FDG avid foci in the bone marrow (positive). 
+•	Not Evaluable (PET not available or very bad quality)	One answer required.
+Application must check in real time when ‘Focal FDG avid disease in the bone marrow (positive)’ is selected and there is a prior time point with response of ‘No evidence of FDG avid disease in the marrow (negative)’ or ‘Diffuse FDG update, believed to be benign (negative)’ display the following message:
+•	“You have indicated that there is focal FDG avid disease in the bone marrow however, the prior time point was negative. Please consider if the bone marrow assessment is better classified as new or recurrent disease and modify your selection. (Ok)
+Reader must click ‘Ok’ to close the message, change is required.
+Application must check in real time when 'New or recurrent FDG avid foci in the bone marrow (positive)' is selected and P1 has a PET Assessment of 'Negative', display the following message: 
+•	"You have indicated that there is New or recurrent FDG avid foci in the bone marrow (positive), but the most avid site of disease (P1) is selected to be Negative. Please modify either the bone marrow or PET lesion assessment."
+Change is required.
+Upon sign off application must check in real time when ‘Focal FDG avid disease in the bone marrow (positive)’ is selected and the PET TPR is ‘CMR’ , display the following message:
+•	“You assessed persistent FDG avidity in the bone marrow, but your most avid PET lesion is negative. Please reconsider your selection for the bone marrow involvement question or be sure this positive uptake is reflected by your P1 annotation.”
+Change is required. 
+Note: if not auto-populated to ‘Not Evaluable (PET not available or very bad quality)’ based on rules – is a selectable option.
+
+Requirement and Description
+BRS-S2QA-010b Field text: Qualitative combined changes in overall intensity and extent of uptake compared to Screening or Nadir.
+ [Control name: DeterminationChange]
+Rule	Answer Option	Logic
+Ask this question if Optimal or Readable, but not optimal is selected for technical adequacy. 
+Populate and disable to ‘NE’ with ‘Not Readable’ for technical adequacy.
+Populate and disable to ‘NE’ if no PET imaging is present.	•	Increase from nadir
+•	Decrease from screening
+•	No Change
+•	NE (non-selectable)	One required answer. 
+Applies to subjects with PET lesion ‘Positive’ or ‘Negative’ at screening:
+•	Auto-populate and disable to ‘NE’ if Five Point Score is ‘NE’.
+•	Subject with PET Lesion ‘Positive’ at Screening: Auto-populate and disable with ‘Decrease’ if 1, 2 or 3 is selected @B-RS-S2QA-005 Five Point Score.
+•	Subject with PET Lesion ‘Negative’ at Screening: Auto-populate with ‘Decrease’ if  1, 2 or 3 is selected @B-RS-S2QA-005 Five Point Score and allow the reader to edit.
+•	Subjects with PET Lesion ‘Negative’ at Screening: Auto-populate with ‘Increase’ if 4 or 5 is selected @BR-S-S2QA-005 Five Point Score. 
+•	Auto-populate and disable with ‘Increase’ if New CT lesion with PET Assessment = Positive
+•	If answer is not auto-populated based on rules above require the reader to select.
+o	Limit the answer options to ‘Increase from nadir’ and ‘Decrease from screening’ with a prior response of ‘Decrease from screening’. 
+Applies to subjects with PET lesion ‘NE’ at Screening:
+•	Auto populate and disable to ‘NE’ if Five Point Score is ‘NE’
+•	Auto populate and disable to ‘NE’ if Five Point Score is 1, 2 or 3.
+•	Auto-populate and disable with ‘Increase’ if New CT lesion with PET Assessment = Positive
+•	Auto-populate and disable to ‘NE’ when it’s the first time point a PET image is assessable (loaded) when missing at Screening/Baseline. 
+•	Enable the following answer options with Five Point Score of 4 or 5 and there is a prior timepoint with PET imaging assessable:
+o	Increase from nadir
+o	NE
+
+Requirement and Description
+BRS-S2QA-020 Field text: PET Time point Response:
+ [Control name: TimePointResponsePET]
+Rule	Answer Option	Logic
+Always read only.
+Populate and disable to ‘NE’ if Screening time point was ‘Not Readable’ for technical adequacy.
+Populate and disable to ‘NE’ with ‘Not Readable’ for technical adequacy.
+Populate and disable to ‘PMD’ if there is a prior response of PMD. 
+Populate and disable to ‘NE’ if no PET imaging is present, and PMD has not been achieved.	•	Complete Metabolic Response (CMR)
+•	Partial Metabolic Response (PMR)
+•	No Metabolic Response (NMR)
+•	Progressive Metabolic Disease (PMD)
+•	Not Applicable (NA)
+•	Not Evaluable (NE)	One answer required.
+•	Auto-populate to ‘PMD’ if Bone Marrow question (B-RS-S2QA-002) is ‘New or recurrent FDG avid foci in the bone marrow (positive)’, else
+•	Auto-populate a PET TPR based on the PET Staging Response Assessment table at B-S-PRD-005a/b/c.
+o	Auto populate to ‘NE’ if there is a prior TPR of CMR and the derived TPR for the current time point is not CMR or PMD.
+o	Auto-populate and disable to Not-Evaluable (NE) if there is a prior TPR of CMR or PMR, and the current time point response is NMR.
+
+Requirement and Description
+BRS-S2QA-022 Field text:  Designated PET Time Point Response
+ [Control name: TimePointResponseDesignatedPET ]
+Rule	Answer Option	Logic
+Enable if Optimal or Readable, but not optimal is selected for technical adequacy.
+
+
+	FDG-avid Subjects:
+•	Complete Metabolic Response (CMR)
+•	Partial Metabolic Response (PMR)
+•	No Metabolic Response (NMR)
+•	Progressive Metabolic Disease (PMD)
+•	Not Evaluable (NE)
+
+Non FDG-avid Subjects:
+•	Progressive Metabolic Disease (PMD)
+•	Not Applicable (NA)
+•	Note Evaluable (NE)	One answer required
+Defaults to the PET TPR, do not allow the reader  to edit (disable) if response is ‘NE’ due to any of the following: 
+1.	Technical adequacy has value = Not Readable.
+2.	No PET images are loaded for the time point.
+3.	Response of ‘NE’ due to Screening timepoint of Not Readable. 
+4.	Derived response of ‘NE’ due to ‘prior TPR of CMR and the derived TPR for the current time point is not CMR or PMD’.
+5.	Derived response of ‘NE’ due to ‘prior TPR of CMR or PMR, and the current time point response is NMR’
+Defaults to the PET TPR, do not allow the reader to edit (disable) if response is ‘PMD’.
+Defaults to the PET TPR, allow the reader to edit, if not disabled.
+•	If there is a prior Designated PET response of CMR, limit the options to: CMR, PMD and NE
+•	If there is a prior Designated PET response of PMR, limit the options to: CMR, PMR, PMD and NE
+Note: when Response is NE due to out of sequence responses sub-bullets 4 and 5 above, the PET+CT TPR will also be ‘NE’. 
+
+Requirement and Description
+BRS-S2QA-021 Field text: PET Time Point Response Date:
+ [control name: TimePointResponsePETDate]
+Rule	Answer Option	Logic
+Hidden Field
+Populate and disable to ‘n/a’ with a technical adequacy response of ‘Not Readable’ for the time point - due to Time Point missing.	(dd-Mmm-yyyy)
+n/a	•	For Designated PET  TPR not equal to PMD, auto populate with <latest> date associated with the imaging time point.
+•	For Designated PET  TPR equal to PMD, auto populate with <earliest> date associated with the imaging time point.
+
+Requirement and Description
+BRS-S2QA-023 Field text: Comment on your rational for changing the PET Time Point Response:
+ [Control name: CommentChangingPETResponse]
+Rule	Answer Option	Logic
+Enable if PET TPR and Designated PET TPR does not match exactly.	Text	Required if enabled, otherwise not required.
+
+
+Requirement and Description
+BRS-S2QA-045 Field text:  CT Time Point Response:
+ [Control name: TimePointResponseCT]
+Rule	Answer Option	Logic
+Always read only.
+Populate and disable to ‘NE’ if Screening time point was ‘Not Readable’ for technical adequacy.
+Populate and disable to ‘NE’ with ‘Not Readable’ for technical adequacy.
+Populate and disable to ‘PD’ if there is a prior response of PD.	•	Complete Response (CR)
+•	Partial Response (PR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Not Evaluable (NE) 
+•	Not Applicable (NA)
+•	No Evidence of Disease (NED)  	•	Auto-populate and disable with a combined Target, Non-Target, presence/absence of New lesions, and Spleen evaluation -  refer to table @ Time Point Response (BR-S-TPR-001)
+o	Auto populate and disable to Not-Evaluable (NE) if there is a prior TPR of CR and the derived TPR for the current time point is not CR or PD.
+o	Auto-populate and disable to Not-Evaluable (NE) if there is a prior TPR of CR or PR, and the current time point response is SD.
+Note: Auto-populate rules for NE (sub-bullets above) will override response of PR or SD based on selected reader choice in rows 6, 11 and 14 (sub-bullets below).  
+o	Enable for readers’ choice with a Target Response of CR or PR, Non-Target Response of NE, New Lesion Impact of No and Spleen is Not PD (rows 6 and 11 in the CT TPR Table) provide the following options:
+	Partial Response (PR)
+	Not Evaluable (NE)
+o	Enable for readers’ choice with a Target Response of SD, Non-Target Response of NE, New Lesion Impact of No and Spleen is Not PD (rows 14 in the CT TPR Table) provide the following options:
+	Stable Disease (SD)
+	Not Evaluable (NE)
+
+
+
+
+
+
+
+
+Requirement and Description
+BRS-S2QA-050 Field text:  PET+CT Time Point Response
+ [Control name: TimePointResponseCTPET ]
+Rule	Answer Option	Logic
+Always read only.
+
+Populate and disable to ‘NE’ if Screening time point was ‘Not Readable’ for technical adequacy.	•	Complete Response (CR)
+•	Partial Response (PR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Not Evaluable (NE) 
+•	Not Applicable (NA)
+•	No Evidence of Disease (NED)	•	Default to Not Evaluable if technical adequacy has a value = Not Readable.
+•	Default to NE if PET TPR is ‘NE’ due to out of sequence response (refer to B-RS-S2QA-020).
+•	Auto-populate a combined CT Time Point Response + PET TPR -  refer to requirements  (BR-S-IRTPR-010)
+
+Requirement and Description
+BRS-S2QA-052 Field text:  Designated PET+CT Time Point Response
+ [Control name: TimePointResponseDesignatedCTPET ]
+Rule	Answer Option	Logic
+Enable if Optimal or Readable, but not optimal is selected for technical adequacy.
+	FDG-avid Subjects:
+•	Complete Response (CR)
+•	Partial Response (PR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Not Evaluable (NE) 
+
+Non FDG-avid Subjects:
+•	Progressive Disease (PD)
+•	Non-Evaluable (NE)
+•	Derived Response carried over from the PET+CT TPR (NED, CR, PR, SD)
+
+FDG Non-Avid answer option:
+if derived in NED – dropdown must consist of NED, NE, PD
+ If derived is CR – dropdown must consist of CR, NE, PD.
+if derived is PR – dropdown must consist of PR, NE, PD.
+if derived is SD – dropdown must consist of SD, NE, PD.	Default and disable to Not Evaluable if technical adequacy has a value = Not Readable.
+Default and disable to Not Evaluable if technical adequacy at Screening timepoint = Not Readable. 
+•	One answer required.
+o	Defaults to the PET+CT TPR, and do not allow the reader to edit (disable) with a response of ‘NE’ due to out of sequence response. 
+o	Defaults to PET+CT TPR, do not allow the reader to edit (disable) with a response of ‘PD’. 
+o	Default to the PET+CT TPR, allow the reader to edit, when not disabled.
+•	If there is a prior Designated PET+CT response of CR, limit the options to: CR, PD and NE
+•	If there is a prior Designated PET+CT response of PR, limit the options to: CR, PR, PD and NE
+
+
+Requirement and Description
+BRS-S2QA-051 Field text: PET+CT Time Point Response Date:
+[control name: TimePointResponseCTPETDate]
+Rule	Answer Option	Logic
+Hidden Field
+Default to ‘n/a’ with a technical adequacy response of ‘Not Readable’ for the time point - due to Time Point missing.	Date (dd-Mmm-yyyy)
+n/a	•	For Designated PET+CT TPR not equal to PD, auto populate with <latest> date associated with the imaging time point.
+•	For Designated PET+CT TPR equal to PD, auto populate with <earliest> date associated with the imaging time point.
+
+Requirement and Description
+BRS-S2QA-053 Field text: Comment on your rational for changing the PET + CT Time Point Response:
+ [Control name: CommentChangingCTPETResponse]
+Rule	Answer Option	Logic
+Enable if PET+CT TPR and Designated PET+CT TPR does not match exactly.	Text	Required if enabled, otherwise not required.
+
+
+
+Session 3: Global: Data Display
+Requirement	Requirement Description
+BRS-S3LC-001	The system must produce and display an <Target> Lesion Calculation Summary for CT/MR Lesions in Sessions 2, and 3 that allows for interaction on Lesion Status: 
+•	Time point (mask as appropriate)
+•	Lesion label
+•	Location
+•	Slice number of ROI
+•	Actual LDi (mm) – Actual Longest Diameter (LDi) from an ROI, (rounded to <n> decimal precision) 
+•	Final LDi (mm) – Actual LDi with default applied, (rounded to <0> decimal precision) 
+•	Actual SDi (mm)  – Actual Shortest Diameter (SDi) from an ROI, (rounded to <n> decimal precision) .
+•	Final SDi (mm) – Actual SDi with default applied, (rounded to <0> decimal precision) 
+•	Final PPD (mm) - sum of final cross product (LDi x SDi) defaults applied (rounded to <0> decimal precision) 
+•	Absolute Change Nadir LDi (mm) - Calculated change in LDi from the smallest value across time points (Current LDi – nadir LDi) (rounded to <0> decimal precision) Populate with n/a if lesion is ‘missing’ in the current time point.
+•	Absolute Change Nadir SDi(mm) - Calculated change in SDi from the smallest value across time points (Current SDi – nadir SDi) (rounded to <0> decimal precision) Populate with n/a if lesion is ‘missing’ in the current time point.
+•	% Change Screening PPD - Calculated percent change in cross product of an ROI since screening % = [(Current PPD – Screening PPD) / Screening PPD)*100] , (rounded to <0> decimal precision) Populate with n/a if lesion is missing in the current time point.
+•	% Change Nadir PPD - Calculated percent change in PPD drawn at the current time point and smallest measurement of the same ROI drawn at any other time point. [(Current PPD – Nadir PPD)/Nadir PPD) *100], (rounded to <0> decimal precision) Populate with n/a if lesion is ‘missing’ in the current time point. 
+•	Lesion Status 
+•	PET Assessment - (Positive, Negative, Not Evaluable)
+•	Lesion Override Status (as recorded for the given time point)
+•	Lesion Override Status Reason (as recorded for the given time point)
+BRS-S3LC-005	The system must display the following data in the <Target> Lesions Sums for the CT/MR Lesions:
+•	Time Point (masked as appropriate)
+•	Response SPD(mm)  - Display the calculated cross product sum (defaults applied) for the time point (rounded to <0> decimal precision)  
+o	If there are no Index/Target lesions at screening, this is ‘n/a’ for all timepoints
+o	If all lesions are not evaluable, this is ‘n/a’
+•	% Change Screening SPD – [(Current Response SPD – Screening Response SPD))/Screening Response SPD)*100], (rounded to <0> decimal precision)  
+o	At screening, this is always ‘n/a’
+o	If there are no Index/Target lesions at screening, this is ‘n/a’ for all timepoints.
+o	% Change screening SPD is calculated if all lesions are evaluable but if any one lesion at current timepoint is Not Evaluable, this is ‘n/a’ 
+•	% Change Nadir SPD – [(Current Response SPD – Nadir Response SPD)/Nadir Response SPD)*100], (rounded to <0> decimal precision)  
+o	At screening, this is always ‘n/a’ 
+o	If there are no Index/Target lesions at screening, this is ‘n/a’ for all timepoints.
+o	If all lesions are not evaluable, this is ‘n/a
+o	% change nadir SPD is always calculated based on numeric SPD value of lesions that are evaluable
+BRS-S3LC-020	The system must display the following Non-Target lesion data for CT/MR <Non-Target> Lesions in Sessions 2, and 3, that allows for interaction on Lesion Status: 
+•	Time point (masked as appropriate)
+•	Lesion Label
+•	Location
+•	Lesion Status
+•	PET Assessment - (Positive, Negative, Not Evaluable)
+•	Lesion Override Status (as defined for the given time point)
+•	Lesion Override Status Reason (as defined for the given time point)
+
+Time Point Summary Panels (CT and PET) (BR-S-TPS)
+Requirement	Requirement Description
+BRS-S3TPS-001	The system must produce and display a Timepoint Summary Panel for CT evaluation in Sessions 3: 
+•	Time point (mask as appropriate)
+•	Min Exam Date
+•	Max Exam Date
+•	CT <Target> Response
+•	CT <Non-Target> Response
+•	Number of new CT lesions (added in the current time point)
+•	Spleen Status
+•	Spleen Response
+•	CT Time Point Response
+•	PET+CT Time Point Response
+•	Designated PET+CT TPR
+•	Comment on change PET+CT TPR
+•	Reason for Reassessment
+•	Follow-up time point comment (leave blank if no comment)
+•	Override CT Target Response (as calculated for the given time point)
+•	Override CT Non-Target Response (as calculated for the given time point)
+•	Final CT TPR (as calculated for the given time point)
+BRS-S3TPS-005	The system must produce and display a Timepoint Summary Panel for PET evaluation in Session2, and 3, that allows for interaction on Designated PET TPR: 
+•	Time point (mask as appropriate)
+•	Min Exam Date
+•	Max Exam Date
+•	Evidence of bone marrow involvement (for on-study time points)
+•	Five-Point Scale (for on-study time points)
+•	Qualitative combined changes in overall intensity
+•	PET Time Point Response 
+•	Designated PET TPR
+•	Reason for Reassessment
+•	Follow-up time point comment (leave blank if no comment)
+•	Override Designated PET TPR
+•	Designated PET TPR Override TPR reason
+•	Final PET TPR (as calculated for the given time point)
+BRS-S3TPS-010	The system must produce and display a TPR Summary Panel for PET + CT evaluation in Session 3:
+•	Time point (masked as appropriate)
+•	CT TPR – recorded for the time point
+•	Designated PET TPR – recorded for the timepoint
+•	Designated PET + CT TPR – recorded for the time point
+•	Override CT TPR – NE or blank if not overridden in Global session
+•	Override Designated PET TPR - NE or blank if not overridden in Global session
+•	Override Designated PET + CT TPR – NE or blank see B-RS-S3QA-028
+•	Final PET + CT TPR – see BR-S-S3QA-030
+Session 3: Questions/Answers (BR-S-S3QA)
+Requirement and Description
+BRS-S3QA-010 Field text: Is there on-study radiotherapy data and/or on-study surgical data present?
+[Control name: OnstudyRadiotherapySurgicalPresent]
+Rule	Answer Option	Logic
+Always as this question	•	Yes
+•	No	One answer required.
+•	If a time point is re-assessed or inserted, application must ensure that the answer of ‘Yes’ or ‘No’’ from the last Global session is maintained.
+
+
+
+
+Requirement and Description
+BRS-S3QA-011 Field text: Does the on-study radiotherapy data impact the CT assessment?
+[Control name: OnstudyDataImpactCT]
+Rule	Answer Option	Logic
+Always as this question. Enable when B-RS-S3QA-010 = Yes. 	•	Yes
+•	No	Default to No, allow the reader to edit when enabled. 
+One answer required
+•	If a time point is re-assessed or inserted, application must ensure that the answer of ‘Yes’ or ‘No’ at the previous Global session is maintained.
+Upon sign off if the answer is ‘Yes’ and there are no CT lesion(s) status overrides with value ‘Not Evaluable, on-study radiotherapy’, display the following message:
+•	The response to Radiotherapy impact question is ‘Yes’, but there are no lesion status overrides. Please ensure you have made the necessary lesion status override(s) or change the response to ‘No’.
+Change is required.
+Upon sign off if the answer is ‘No’ and there is at least one CT lesion status override present, display the following message:
+•	The response to Radiotherapy impact question is ‘No’, but there are lesion(s) status overrides present. Please ensure there are no lesion status overrides or change the response to ‘Yes’.
+Change is required.
+
+Requirement and Description
+BRS-S3QA-012 Field text: Does the on-study radiotherapy data and/or on-study surgical data impact the PET assessment?
+[Control name: OnstudyDataImpactPET]
+Rule	Answer Option	Logic
+Always as this question. Enable when B-RS-S3QA-010 = Yes.	•	Yes
+•	No
+•	Yes: with no change required	Default to No, allow the reader to edit when enabled. 
+One answer required.
+•	If a time point is re-assessed or inserted, application must ensure that the answer of ‘Yes’, ‘No’ or ‘Yes: with no change required’ at the previous Global session is maintained.
+Upon sign off if the answer is ‘Yes’ and overrides value of ‘Not Evaluable – on study radiotherapy’, ‘Not Evaluable -  on study surgery’ or ‘Not Evaluable – on study radiotherapy/surgery’ display the following message:
+•	The response to On-study radiotherapy data and/or on-study surgical data question is ‘Yes’. Please ensure you have made the necessary PET TPR override or change the response to ‘No’.
+Change is required.
+Upon sign off if the answer is ‘No’ and the Designated PET TPR shows override, display the following message:
+•	The response to On-study radiotherapy data and/or on-study surgical data question is ‘No’, however the Designated PET TPR has been overridden. Please reconsider the Designated PET TPR status override or change the response to ‘Yes’. 
+Change is required.
+
+Requirement	Requirement Description
+BRS-S3QA-013
+	Always display the following Field text (under the questions on top eCRF): 
+If on-study clinical data is present and impact the patients TPR response, please perform the lesion and PET TPR override function within the Global session by right clicking over the lesion label in the TP where you want to apply the data. Please note that any on-study radiotherapy or surgical intervention will result in an impacted PET TPR, while CT target and non-target lesions may not always be impacted.
+
+Requirement and Description
+BRS-S3QA-014 Field text: Override Lesion Status
+[Control name: OverrideLesionStatus]
+Rule	Answer Option	Logic
+Allow change if both answers = Yes
+•	OnstudyRadiotherapySurgicalPresent
+•	OnstudyDataImpactCT	•	Yes
+•	No	On the TLC Summary panel for Timepoint2 and all subsequent timepoints, when reader clicks on CT Target lesion label ask the question ‘Override Lesion Status’:
+•	If ‘No’ selected close the question box
+•	If ‘Yes’ selected populate [OverrideLesionStatusReason] to “Not evaluable – on study radiotherapy”
+Carry the OverrideLesionStatus and OverrideLesionStatusReason for that lesion label to all subsequent time points (even if lesion becomes Not Present/Resolved or Not Present for any reason). 
+Once a time point has an override lesion status of ‘Yes’ for lesion label, do not provide the context menu for that lesion at later time points.
+Within any one Global session, allow the reader to toggle between Yes or No at the first Time Point on the panel they wish to override a lesion status.
+In any subsequent Global Session:
+•	Allow reader to undo an overridden lesion status from a prior Global Session at only at the earliest time point when the override occurred on the panel. If done, display the following message:
+o	“You have changed a lesion status override from ‘Yes’ to ‘No’. Please leave a comment describing the reason for this action.”
+Reader to click ‘Ok’ to close message, display a required visible comment box for “Reason for Override Lesion Status Change”
+Note: In any subsequent global session if a lesion is overridden to Yes in same Global session and then if reader changes the status back to No, do not display the message and comment box.
+If a time point is re-assessed or inserted, in Global all prior time point override lesion statuses and override responses will remain as is.
+•	In Global check the previous time point OverrideLesionStatus:
+o	If the previous OverrideLesionStatus was ‘No’, reset the current Override Lesion Status to No for the current and all subsequent time points. Then reader will need to change the override status at the appropriate time point(s) in Global.
+o	If the previous OverrideLesionStatus was ‘Yes’, keep the OverrideLesionStatus for the current time point and all subsequent time points.
+
+Requirement and Description
+BRS-S3QA-015 Field text: Override Target Response
+[Control name: OverrideIndexResponseCT]
+Rule	Answer Option	Logic
+Always read only	•	Not Evaluable (NE)	If anyone target lesion in the time point has an Override Status of ‘Not Evaluable, on study radiotherapy’ and the current TPR Target Response is not ‘PD’ populate with ‘NE’.
+•	If the Target Response in a subsequent time point is ‘PD’ do not override, Response of ‘PD’ must remain.  
+•	If recalculated Override Target Response is same as original response, do not populate OverrideIndexResponseCT, display blank and save ‘‘No Selection” to database.
+•	If no override display blank and save ‘No Selection’ to database.
+
+Requirement and Description
+BRS-S3QA-016 Field text: Final Target Response
+ [Control name: FinalIndexResponseCT]
+Rule	Answer Option	Logic
+Always read only.
+Hidden field.
+	•	Complete Response (CR)
+•	Partial Response (PR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Not Evaluable (NE) 
+•	Not Applicable (NA)	If the time point has an Override Target Response, display [OverrideIndexResponseCT].
+If the time point does not have an Override Target Response, display actual [IndexResponseCT].
+
+
+Requirement and Description
+BRS-S3QA-017 Field text: Override Lesion Status
+[Control name: OverrideLesionStatus]
+Rule	Answer Option	Logic
+Allow change if both answers = Yes
+•	OnstudyRadiotherapySurgicalPresent
+•	OnstudyDataImpactCT
+AND the lesion has a status of ‘Present’ or ‘Present and Normal’.	•	Yes
+•	No	On the Non-Target panel for Timepoint2 and all subsequent timepoints, when reader clicks on Non-Target lesion label ask the question ‘Override Lesion Status’:
+•	If ‘No’ selected close the question box
+•	If ‘Yes’ selected populate [OverrideLesionStatusReason] to “Not evaluable – on study radiotherapy”
+Carry the OverrideLesionStatus and OverrideLesionStatusReason for that lesion label to all subsequent time points (even if lesion becomes Not Present/Resolved or Not Present for any reason). Do not change status if has ‘Present with progression’. 
+Once a time point has an override lesion status of ‘Yes’ for lesion label, do not provide the context menu for that lesion at later time points.
+Within any one Global session, allow the reader to toggle between Yes or No at the first Time Point on the panel they wish to override a lesion status.
+In any subsequent Global Session:
+•	Allow reader to undo an overridden lesion status from a prior Global Session at only at the earliest time point when the override occurred on the panel. If done, display the following message:
+o	“You have changed a lesion status override from ‘Yes’ to ‘No’. Please leave a comment describing the reason for this action.”
+Reader to click ‘Ok’ to close message, display a required visible comment box for “Reason for Override Lesion Status Change”
+Note: In any subsequent global session if a lesion is overridden to Yes in same Global session and then if reader changes the status back to No, do not display the message and comment box.
+If a time point is re-assessed or inserted, in Global all prior time point override lesion statuses and override responses will remain as is.
+•	In Global check the previous time point OverrideLesionStatus:
+o	If the previous OverrideLesionStatus was ‘No’, reset the current Override Lesion Status to No for the current and all subsequent time points. Then reader will need to change the override status at the appropriate time point(s) in Global.
+o	If the previous OverrideLesionStatus was ‘Yes’, keep the OverrideLesionStatus for the current time point and all subsequent time points.
+
+Requirement and Description
+BRS-S3QA-018 Field text: Override Non-Target Response 
+ [Control name: OverrideNonIndexResponseCT]
+Rule	Answer Option	Logic
+Always read only.
+	•	Not Evaluable (NE)	If anyone non-target lesion in the time point has an Override Status of ‘Not Evaluable, on study radiotherapy’ and the current Non-Target Response is not ‘PD’ populate with ‘NE’.
+•	If the Non-Target Response in a subsequent time point is ‘PD’ do not override, Response of ‘PD’ must remain.  
+•	If recalculated Override Non-Target Response is same as original response, do not populate OverrideNonIndexResponseCT, display blank and save ‘‘No Selection” to database.
+If no override display blank and save ‘No Selection’ to database. 
+
+Requirement and Description
+BRS-S3QA-019 Field text: Final Non-Target Response
+ [Control name: FinalNonIndexResponseCT]
+Rule	Answer Option	Logic
+Always read only.
+Hidden field.
+	•	Complete Response (CR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Not Evaluable (NE) 
+•	Not Applicable (NA)	If the time point has an Override Non-Target Response, display [OverrideNonIndexResponseCT].
+If the time point does not have an Override Non-Target Response, display actual [NonIndexResponseCT].
+
+Note: New lesion will not have Override options.
+
+Requirement and Description
+BRS-S3QA-020 Field text: Override CT Time Point Response
+ [Control name: OverrideTimePointResponseCT]
+Rule	Answer Option	Logic
+Hidden field	
+•	Not Evaluable (NE)	If Target or Non-Target lesion has an Override Status of Yes and the current CT TPR is not PD, override the CT TPR per based on criteria rules (B-RS-TPR-001 and B-RS-S2QA-045), if the current CT TPR is PD do not override, display blank and save ‘‘No Selection’ to database.
+•	For rows 6, 11 and 14 in CT TPR Table do not give option during this session - populates with ‘NE’.
+If recalculated Override CT Time Point Response is same as original response, do not populate Override CT Time Point Response, display blank and save ‘‘No Selection” to database. 
+
+
+
+
+
+
+
+Requirement and Description
+BRS-S3QA-021 Field text: Override CT Time Point Response Date
+ [Control name: OverrideTimePointResponseDateCT] 
+Rule	Answer Option	Logic
+Hidden field.	Date 
+(dd-Mmm-yyyy)	If CT Time Point Response is overridden , then apply these date rules:
+•	For TPR not equal to PD, auto populate with <latest> date associated with the imaging time point.
+
+Requirement and Description
+BRS-S3QA-022 Field text: Final CT Time Point Response
+ [Control name: FinalTimePointResponseCT]
+Rule	Answer Option	Logic
+Always read only.
+	•	Complete Response (CR)
+•	Partial Response (PR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Not Evaluable (NE)
+•	No Evidence of Disease (NED)	If the time point has an override time point response, display [OverrideTimePointResponseCT].
+If the time point does not have an override time point response, display actual [TimePointResponseCT].
+
+Requirement and Description
+BRS-S3QA-023 Field text: Final CT Time Point Response Date
+ [Control name: FinalTimePointResponseCTDate] 
+Rule	Answer Option	Logic
+Hidden field.	Date 
+(dd-Mmm-yyyy)	If the Final CT Time Point Response is the Override CT Time Point Response, display [OverrideTimePointResponseCTDate].
+If the Final CT Time Point Response is the actual CT Time Point Response, display [TimePointResponseCTDate].
+
+Requirement and Description
+BRS-S3QA-024  Field text: Override Designated PET TPR 
+ [Control name: OverrideTimePointResponseDesignatedPET ]
+Rule	Answer Option	Logic
+Allow change if  both answers = Yes
+•	OnstudyRadiotherapySurgicalPresent
+•	OnstudyDataImpactPET
+AND the Designated PET TPR is not PMD.	•	Not Evaluable (NE)
+	On the Time Point Summary for PET evaluation, when the reader clicks on the Designated PET TPR as the question ‘Override PET TPR’
+•	If ‘No’ selected close the question box.
+•	If ‘Yes’ selected present second question box with the following answer options:
+•	Not Evaluable – on study radiotherapy
+•	Not Evaluable -  on study surgery
+•	Not Evaluable – on study radiotherapy/surgery
+One answer required, populate selected choice to OverrideTimePointResponseDesignatedPETReason 
+Carry the OverrideTimePointResponseDesignatedPETStatus and OverrideTimePointResponseDesignatedPETReason to all subsequent time points not equal to PMD, do not change a timepoint that has a Designated PET TPR of PMD. 
+Once a time point has an override Designated PET TPR of ‘Yes’ do not provide the context menu at later timepoints. 
+Within any one Global session, allow the reader to toggle between Yes or No at the first Time Point on the panel they wish to override the Designated PET TPR.
+In any subsequent Global Session:
+•	Allow reader to undo an overridden Designated PET TPR from a prior Global Session at only at the earliest time point when the override occurred on the panel. If done, display the following message:
+o	“You have changed a Designated PET TPR override from ‘Yes’ to ‘No’. Please leave a comment describing the reason for this action.”
+Reader to click ‘Ok’ to close message, display a required visible comment box for “Reason for Override Designated PET TPR Change”
+Note: In any subsequent global session if the Designated PET TPR is overridden to Yes in same Global session and then if reader changes the status back to No, do not display the message and comment box.
+If a time point is re-assessed or inserted, in Global all prior time point override Designated PET TPR and override responses will remain as is.
+•	In Global check the previous time point OverrideTimePointResponseDesignatedPET: 
+o	If the previous OverrideTimePointResponseDesignatedPET was ‘No’, reset the current Override Designated PET TPR to No for the current and all subsequent time points. Then reader will need to change the override status at the appropriate time point(s) in Global.
+If the previous OverrideTimePointResponseDesignatedPET was ‘Yes’, keep the OverrideTimePointResponseDesignatedPETReason for the current time point and all subsequent time points.  
+
+Requirement and Description
+BRS-S3QA-025 Field text: Override PET Time Point Response Date
+ [control name: OverrideTimePointResponsePETDate]
+Rule	Answer Option	Logic
+Hidden Field
+	(dd-Mmm-yyyy)
+n/a	If Designated PET Time Point Response is overridden, then apply these date rules:
+•	For Designated PET  TPR not equal to PMD, auto populate with <latest> date associated with the imaging time point.
+
+Requirement and Description
+BRS-S3QA-026 Field text: Final PET TPR
+ [Control name: FinalTimePointResponsePET]
+Rule	Answer Option	Logic
+Always read only.
+	•	Complete Metabolic Response (CMR)
+•	Partial Metabolic Response (PMR)
+•	No Metabolic Response (NMR)
+•	Progressive Metabolic Disease (PMD)
+•	Not Applicable (NA)
+•	Not Evaluable (NE)	If the time point has an override time point response, display [OverrideTimePointResponseDesignatedPET].
+If the time point does not have an override time point response, display actual [TimePointResponseDesignatedPET].
+
+Requirement and Description
+BRS-S3QA-027 Field text: Final PET Time Point Response Date
+ [Control name: FinalTimePointResponsePETDate] 
+Rule	Answer Option	Logic
+Hidden field.	Date 
+(dd-Mmm-yyyy)	If the Final PET Time Point Response is the Override Designated PET Time Point Response, display [OverrideTimePointResponsePETDate].
+If the Final PET Time Point Response is the actual Designated PET Time Point Response, display [TimePointResponsePETDate].
+
+Requirement and Description
+BRS-S3QA-028 Field text: Override Designated PET +CT TPR
+ [Control name: OverrideTimePointResponseDesignatedPETCT] 
+Rule	Answer Option	Logic
+Always read only – value is found in the ‘TPR Summary panel for PET+CT Evaluation’ panel 	Non-Evaluable (NE)	If the CT TPR and/or Designated PET TPR has an Override Status of Yes populate with ‘NE’ if the current Designated PET+CT TPR is PD do not override, display blank and save ‘No Change’ No Selection to database.
+If Override Designated PET+CT TPR is same as original (NE), do not populate Override Designated PET + CT TPR, display as blank and save ‘No Change’ No Selection’ to database. 
+
+Requirement and Description
+BRS-S3QA-029 Field text: Override Designated PET+ CT  Time Point Response Date
+ [control name: OverrideTimePointResponseCTPETDate]
+Rule	Answer Option	Logic
+Hidden Field 
+	(dd-Mmm-yyyy)
+n/a	If Designated PET+CT Time Point Response is overridden, then apply these date rules:
+•	For Designated PET+CT  TPR not equal to PMD, auto populate with <latest> date associated with the imaging time point.
+
+Requirement and Description
+BRS-S3QA-030 Field text: Final PET+CT  TPR
+ [Control name: FinalTimePointResponsePETCT]
+Rule	Answer Option	Logic
+Always read  - value is found in the ‘TPR Summary panel for PET+CT Evaluation’ panel only.	•	Complete Response (CR)
+•	Partial Response (PR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Not Evaluable (NE)
+•	No Evidence of disease (NED)	If the time point has an override time point response, display [OverrideTimePointResponseDesignatedPETCT].
+If the time point does not have an override time point response, display actual [TimePointResponseDesignatedCTPET].
+
+Requirement and Description
+BRS-S3QA-030a Field text: Final PET+CT Time Point Response Date
+ [Control name: FinalTimePointResponsePETCTDate] 
+Rule	Answer Option	Logic
+Hidden field.	Date 
+(dd-Mmm-yyyy)	If the Final PET+CT Time Point Response is the Override Designated PET+CT Time Point Response, display [OverrideTimePointResponsePETCTDate].
+If the Final PET+CT Time Point Response is the actual Designated PET+CT Time Point Response, display [TimePointResponsePETCTDate].
+
+
+
+
+
+Requirement and Description
+BRS-S3QA-031 Field text: Comment Reason for Override Lesion Status/PET TPR Change
+[Control name: ReasonOverrideChangeComment]
+Rule	Answer Option	Logic
+Provide a visible comment box on the eCRF when there is at least one instance when a reader changes a lesion status and/or PET TPR override from ’Yes’ to ‘No’ from previous Global Session, when required by BR-S-S3QA-014, B-RS-S2QA-017, or B-RS-S3QA-024. If reader changes back to ‘Yes’, hide comment.	Text	Required if visible. 
+
+
+Requirement and Description
+BRS-S3QA-032 Field text: Comment Reason for Override Lesion Status Change History
+[Control name: ReasonOverrideLesionStatusChangeCommentHistory]
+Rule	Answer Option	Logic
+Hidden field.	Text	In the backend, comments will save in a concatenated list, separated by pipe for each global session. 
+Session 3: Response Information (B-RS-S3RI)
+Requirement and Description
+BRS-S3RI-001 Field text: PET Date of Progression
+[Control name: DateProgressionPET]
+Rule	Answer Option	Logic
+Always disabled	Date (dd-Mmm-yyyy)
+n/a	Display the PET TPR date associated with the first Final PET Time Point Response instance at which PMD is achieved, else populate with n/a. 
+
+Requirement and Description
+BRS-S3RI-005 Field text: CT Date of Progression 
+[Control name: DateProgressionCT]
+Rule	Answer Option	Logic
+Always disabled
+	Date (dd-Mmm-yyyy)	Display the CT TPR date associated with the first Final CT Time Point Response instance at which PD is achieved, else populate with n/a.
+
+Requirement and Description
+BRS-S3RI-010 Field text: PET Date of First Response
+[Control name: DateFirstResponsePET]
+Rule	Answer Option	Logic
+Always disabled	Date (dd-Mmm-yyyy)
+n/a	Display the PET TPR date associated with the first Final PET Time Point Response instance of PMR or CMR is achieved - whichever comes first for subjects whose PET Best Response is either a CMR or a PMR, else populate with n/a.  
+
+Requirement and Description
+BRS-S3RI-015 Field text: CT Date of First Response 
+[Control name: DateFirstResponseCT]
+Rule	Answer Option	Logic
+Always disabled
+	Date (dd-Mmm-yyyy)
+n/a	Display the CT TPR date associated with the first Final CT time point response instance of PR or CR achieved- whichever comes first for subjects whose CT Best Response is either a CR or a PR, else populate with n/a.
+
+Requirement and Description
+BRS-S3RI-020Field text: PET+CT Date of Progression
+[Control name: DateProgressionCTPET]
+Rule	Answer Option	Logic
+Always disabled	Date (dd-Mmm-yyyy)
+n/a	Display the PET+CT TPR date associated with the first Final PET+CT Time Point Response instance at which PD is achieved, else populate with n/a.
+
+Requirement and Description
+BRS-S3RI-025 Field text: PET+CT Date of First Response 
+[Control name: DateFirstResponseCTPET]
+Rule	Answer Option	Logic
+Always disabled	Date (dd-Mmm-yyyy)
+n/a	Display the PET+CT TPR date associated with the first Final PET+CT Time Point Response  instance of PR or CR achieved- whichever comes first for subjects whose Final PET+CT Best Response is either a CR or a PR, else populate with n/a.
+
+Requirement and Description
+BRS- S3RI-030 Field text: PET Best Response
+[Control name: BestResponsePET]
+Rule	Answer Option	Logic
+Always disabled – read only.	•	Complete Metabolic Response (CMR)
+•	Partial Metabolic Response (PMR)
+•	No Metabolic Response (NMR)
+•	Progressive Metabolic Disease (PMD)
+•	Not Applicable (NA)
+•	Not Evaluable (NE)	One answer is required.
+•	Defined as the best Final PET Time Point Response from all timepoints prior to or including TPR of PMD. 
+Hierarchy for ‘best’ to worst’ =  CMRPMRNMR  PMDNANE
+If Screening/Baseline only subject (no assessable follow-Up time points), the Best Response = NE.
+
+Requirement and Description
+BRS-S3RI-040 Field text: PET+CT Best Response
+[Control name: BestResponseCTPET]
+Rule	Answer Option	Logic
+Always disable – read only.	•	Complete Response (CR)
+•	Partial Response (PR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Not Evaluable (NE)
+•	Not Applicable (NA)
+•	No Evidence of Disease (NED)	One answer is required.
+•	Defined as the best Final PET+CT TPR prior to or including TPR of PD.
+Hierarchy for ‘best’ to worst’ = NA NED CRPRSD PDNE 
+If Screening/Baseline only subject (no assessable follow-Up time points), the Best Response = NE
+
+Requirement and Description
+BRS-S3RI-035 Field text: CT Best Response
+[Control name: BestResponseCT]
+Rule	Answer Option	Logic
+Always disable – read only.
+	•	Complete Response (CR)
+•	Partial Response (PR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Not Evaluable (NE)
+•	Not Applicable (NA)
+•	No Evidence of Disease (NED)	One answer is required.
+•	Defined as the best radiographic Final CT TPR prior to or including TPR of PD.
+Hierarchy for ‘best’ to worst’ = NEDNACRPRSDPDNE 
+If Screening/Baseline only subject (no assessable follow-Up time points), the Best Response = NE.
+Reassessment (BR-S-REA)
+Requirement	Requirement Description
+BRS-REA-001	FDG-Avidity is applied:
+Allow the user to reassess a selected follow-up time point by displaying a reassessment window with answers from Sessions 1 and 2, by clicking the reassessment button for the specific time point  . 
+•	Session 1: Baseline/Screening time point question on Avidity [control name:  IndicateFDGAvidity]  and question on Technical Adequacy [control name: ImageAdequacy]must be locked once time point is completed, do not allow change during reassessment.
+Baseline/Screening time point must be in READ ONLY    once completed in all sequential time points.
+
+Reassessment Questions/Answers (BR-S-QARA)
+Requirement and Description
+BRS-QARA-010 Field text: Is this Pseudoprogression?
+[Control name: ReassessPseudoprgression]
+Rule	Answer Option	Logic
+The question is only visible during reassessment and if the Time Point Response is PD or PMD 	Yes
+No	•	Default answer to No. Opens blank, one answer required
+•	If ‘Yes’ is selected, the application must change all Time Point Responses in question to NE.
+1.	If ‘Yes’ selected the application must recalculate the derived responses based on an NE response, versus the PD/PMD previously derived for that time point.
+	When Integrated PET+CT TPR is enabled [File Base Config. Form: EnableCTPETIntergration = 1] and PET TPR is changed from PMD to NE, application must not look back to the prior evaluable PET TPR when deriving the PET+CT TPR, auto-populate the PET+CT TPR to NE for the timepoint. 
+2.	If ‘Yes’ selected, the application must change all PD/PMD Time Point Response in question to NE - only PD or PMD response will change, for example if the CT is PD and PET is NMR then only the CT response changes to NE PET Response would remain NMR. If both designated and derived Lugano TPRs are PMD then change both to NE. If PET designated TPR is PMD and derived TPR is other than PMD then change only designated TPR to NE and keep derived TPR as is
+•	If ‘No’ selected and the PD/PMD in the current timepoint is not due to ‘Once a PD always PD’, no change is required.
+•	If ‘No’ is selected and the PD/PMD in the current time point is due to ‘Once a PD always PD’ application must recalculate the response for CT based on the logic @BR-S-S2QA-045, for PET based on the logic at @BR-S-S2QA-020.  
+Session 4: Adjudication Data Display (BR-S-S4DD)
+Requirement	Requirement Description
+BRS-S4DD-001	Display the following for each time point assessed “CT Time Point Summary’ by each primary reader:
+•	Time point
+•	Min Exam date
+•	Max Exam date
+•	CT <Target> Response
+•	CT <Non-Target> Response
+•	Number of new CT lesions
+•	Spleen status
+•	Spleen response
+•	CT Time Point response
+•	PET+CT Time Point response
+•	Designated PET+CT Time Point Response
+•	Comment on change PET+CT TPR
+•	Is Pseudoprogression (answer options Yes or No or blank)
+•	Reason for Reassessment
+•	Follow-up time point comment (leave blank if no comment)
+•	Override Target Response (as recalculated for the given time point or blank)
+•	Override Non-Target Response (as recalculated for the given time point or blank)
+•	Final CT TPR (as derived)
+General screening comment (leave blank if no comment)
+BRS-S4DD-005
+	Display the following for each time point assessed “PET Time Point Summary’ by each primary reader:
+•	Time point
+•	Min Exam date
+•	Max Exam date
+•	Evidence of bone marrow involvement (for on-study time points)
+•	Five-Point Scale Qualitative assessment (for on-study time points)
+•	Qualitative combined changes in overall intensity
+•	PET Time Point Response
+•	Designated PET+CT Time Point Response
+•	Comment on change PET TPR
+•	Is Pseudoprogression (answer options Yes or No of blank)
+•	Reason for Reassessment
+•	Follow-up time point comment (leave blank if no comment)
+•	Final PET TPR (as derived)
+General screening comment (leave blank if no comment)
+Evidence of Bone Marrow involvement from Screening
+Five-Point Scale Qualitative assessment from Screening
+BRS-S4DD-006	The system must produce and display a TPR Summary Panel for PET + CT evaluation for each primary reader: 
+•	Time point (masked as appropriate)
+•	CT TPR 
+•	Designated PET TPR
+•	Designated PET + CT TPR
+•	Override CT TPR
+•	Override Designated PET TPR
+•	Override Designated PET + CT TPR
+•	Comment on change PET + CT TPR
+•	Is Pseudoprogression
+•	Final PET+CT TPR
+BRS-S4DD-020	Display the following information for each primary reader’s CT <Target> lesions at each time point:
+•	Time point (mask as appropriate)
+•	Exam date
+•	Lesion label
+•	Lesion Location
+•	 Slice number of ROI
+•	Actual LDi (mm)– Actual longest diameter
+•	Final LDi(mm) – Actual LDi with default applied
+•	Actual SDi (mm)– Actual short diameter
+•	Final SDi (mm)– Actual SDi with default applied
+•	Final PPD(mm)
+•	Absolute Change Nadir LDi (mm)
+•	Absolute Change Nadir SDi (mm)
+•	% Change Screening PPD
+•	% Change Nadir PPD
+•	Lesion Status
+•	PET Assessment
+•	Lesion Override Status (as recorded for the given time point)
+•	Lesion Override Status Reason (as recorded for the given time point)
+BRS-S4DD-030	Display the following information for each primary reader’s CT <Non-Index> <Non-Target> lesions at each time point:
+•	Time point
+•	Lesion Label
+•	Lesion Location
+•	Lesion Status
+•	PET Assessment
+•	Lesion Override Status (as recorded for the given time point)
+•	Lesion Override Status Reason (as recorded for the given time point)
+BRS-S4DD-050
+	Display the following PET information for each primary reader as defined in the File Base Configuration form (control names are applied):
+PET Best Response
+PET Date of First Response
+PET Date of Progression
+CT Best Response
+CT Date of First Response
+CT Date of Progression
+PET+CT Best Response
+PET+CT Date of First Response
+PET+CT Date of Progression
+Global review comment
+Session 5: Clinical 
+
+Requirement	Requirement Description
+BRS-OS5DD-002	Always display the following Field text in READ ONY:
+The following timepoints during Radiology Global Session have been overturned: value (list of time points)
+•	If no timepoints have been overturned populate the value with ‘None’. 
+Example:  The following timepoints during Radiology Global Session have been overturned: Timepoint 2, Timepoint 4, etc.… 
+Example: The following timepoints during Radiology Global Session have been overturned: None 
+
+Requirement	Requirement Description
+BRS-OS5DD-025
+.
+	Display a Radiology Time Point Summary with the following information for each time point:
+•	Time point
+•	TPR - PET (only display short answer response: CMR, PMR, etc.)
+•	<Target> Response-CT (only display short answer response: CR, PR, etc.)
+•	<Non-Targe>t Response-CT (only display short answer response: CR, PR, etc.)
+•	 Spleen Response (only display short answer response: CR, PR, etc.)
+•	# of New CT Lesions
+•	TPR - CT (only display short answer response: CR, PR, etc.)
+•	Is there evidence of bone marrow involvement?
+•	TPR – PET (only display short answer response: CMR, PMR, etc.)
+•	Designated PET TPR (only display short answer response: CR, PR, etc.)
+•	Comment on change PET TPR
+•	PET+CT TPR (only display short answer response: CR, PR, etc.)
+•	Designated PET+CT TPR (only display short answer response: CR, PR, etc.)
+•	Comment on change PET+CT TPR
+•	Is Pseudoprogression –PET+CT 
+Include the Most FDG-avid Lesion Summary:
+•	Time Point
+•	Label
+•	SUVmax
+•	% Change SUVmax Screening
+•	% Change SUVmax Nadir
+BRS- OS5DD-050
+	The system display rows of time point information with the following fields in chronological order.
+•	Time Point: time point name (Time Point 2, etc.)
+•	Min Date: minimum recorded exam date for the time point (radiology)
+•	Max Date: maximum recorded exam date for the time point (radiology)
+•	Overall PET + Clinical Response: populates with the Final PET TPR from radiology global session 
+•	Overall CT + Clinical Response: populates with the Final CT TPR from radiology global session
+•	Overall PET+CT+Clinical Response: derived response for the time point populates with the Final PET + CT TPR from radiology global session.
+•	Designated PET+CT+Clinical Response: populates with the Final PET + CT TPR from radiology global session.
+•	Comment on change PET+CT+Clinical TPR -  added by reader
+•	Clinical Data: empty - added by the reader
+•	Clinical Exam Date: default to radiology TPR Date, allow change
+•	Clinical Data Comment: empty - added by the reader
+BRS-OS5DD-061	The eCRF must provide an informational panel named: Reference Notes, with the data provided in Appendix A: Reference Notes (text, table and footnotes). Allow the reader to toggle the panel on and off.
+BRS-OS5DD-062	The eCRF must provide an informational panel named: PET + CT + Clinical Assessment, with the data provided in Appendix B: PET+CT+Clinical Responses (table and footnotes). Allow the reader to toggle the panel on and off.
+
+Requirement and Description
+BRS-OS5QA-025 Field text:  Overall CT + Clinical Time Point Response:
+[Control name: OverallCTClinicalResponseAnswersDisplay]
+Rule	Answer Option	Logic
+Enable if Yes is selected for ‘Based on the clinical information provided for this subject, does the overall assessment or date for any time point need to be changed’.	•	Complete Response (CR)
+•	Partial Response (PR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Not Evaluable (NE)
+•	Not Applicable (NA)
+•	No Evidence of Disease (NED)	Application must re-calculate and update the following responses, when warrant in real time when the time point(s) ‘Overall CT and Clinical TPR’ change occurred:
+•	Overall CT and Clinical Date of Progression.
+•	Overall CT and Clinical Date of First Response.
+•	Overall CT and Clinical Best Response.
+
+Requirement and Description
+BRS-OS5QA-035 Overall PET + CT + Clinical Time Point Response:
+[Control name: OverallCTPETResponseAnswersDisplay]
+Rule	Answer Option	Logic
+Always read only.
+	•	Complete Response (CR)
+•	Partial Response (PR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Not Evaluable (NE)
+•	Not Applicable (NA) No Evidence of Disease (NED) only provided for subjects that have P1 with PET Assessment of Negative at screening/baseline, else hide option.	Read only: Application must re-calculate and update the following responses, when warrant in real time when the time point(s) ‘Overall CT+PET + Clinical TPR’ change occurred:
+•	Overall CT+PET+ Clinical Date of Progression
+•	Overall CT+PET+ Clinical Date of First Response
+•	Overall CT+PET+ Clinical Best Response.
+
+Requirement and Description
+BRS-OS5QA-036 Designated Overall PET + CT + Clinical Time Point Response:
+[Control name: OverallCTPETResponseDesignatedAnswersDisplay]
+Rule	Answer Option	Logic
+Enable if Yes is selected for ‘Based on the clinical information provided for this subject, does the overall assessment or date for any time point need to be changed’.	•	Complete Response (CR)
+•	Partial Response (PR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Not Evaluable (NE)
+•	No Evidence of Disease (NED)	Default to the Overall PET+CT+Clinical TPR, allow the reader to edit.
+Application must re-calculate and update the following responses, when warrant in real time when the time point(s) ‘Designated Overall PET +CT+ Clinical TPR’ change occurred:
+•	Overall CT+PET+ Clinical Date of Progression
+•	Overall CT+PET+ Clinical Date of First Response
+•	Overall CT+PET+ Clinical Best Response.
+
+Requirement and Description
+BRS-S2QA-037 Field text: Comment on your rational for changing the Overall PET+CT+Clinical TPR:
+ [Control name: CommentChangingOverallCTPETResponseAnswerDisplay]
+Rule	Answer Option	Logic
+Enable if PET+CT+Clinical TPR and Designated PET+CT+Clinical TPR does not match exactly.	Text	Required if enabled, otherwise not required.
+
+Requirement and Description
+BRS-OS5QA-040 Filed text:  Clinical Data:
+[Control name: ClinicalDataAnswersDisplay]
+Rule	Answer Option	Logic
+Enable in the selected timepoint row change is made for Response and/or Exam Date. 	•	Cytology/Pathology confirms PD
+•	Cytology/Pathology confirms CR
+•	Cytology/Pathology downgrade response
+•	PE/On study procedure/Radiotherapy
+•	Bone Marrow
+•	Pathology/Cytology
+•	Other, comment 	Required in each row a change has been made, (multiple answers allowed).
+
+
+Requirement and Description
+BRS-OS5QA-045 Field text:   Clinical Exam Date:
+[Control name: ClinicalExamDateAnswersDisplay]
+Rule	Answer Option	Logic
+Enable if Yes is selected for ‘Based on the clinical information provided for this subject, does the overall assessment or date for any time point need to be changed’	[dd-Mmm-yyyy]
+	Populate with the Radiology max exam date, allow the reader to edit.
+Allow the reader to select a date:
+•	TP2 start date is +1 Days of <Start Date> and extends to -1 day for TP3 min exam date.
+•	TP3 start date is +<n> of TP2 max exam date and extends to -1 day from TP4 min exam date.
+•	TP4 start date is +<n> of TP3 max exam date and extends to -1 day form TP5 min exam date.
+All remaining timepoints will follow same suit as TP3 and TP4 noted above
+Extend the date picker +<x> days from the max exam date for the last radiology time point.
+Extend the date picker to the local system date for the last radiology time point.
+For min exam date in the date picker use the <Start Date> when Screening only time point. 
+
+
+Requirement and Description
+BRS-OS5QA-065  Field text: Overall PET + CT + Clinical TPR Date:
+[control name: OverallCTPETClinicalTPRDateAnswerDisplay]
+Rule	Answer Option	Logic
+Hidden field
+	Date (dd-Mmm-yyyy)
+	Display the date associated with the Designated Overall PET+ CT+ Clinical Response of the time point:
+•	If CR, PR, SD. NED or NE is achieved populate with the radiology max exam date. 
+•	If PD is achieved for Designated Overall Response alone (radiology does not have PD for the time point), populate with the clinical exam date.
+•	If PD is achieved for both Radiology and Designated Overall Responses for the time point, populate with the earliest of the two dates when differ. (rad <min> exam date and clinical exam)
+•	For Clinical only time point populate with the clinical exam date.
+
+Requirement	Requirement Description
+BRS-OS5QA-070	If ‘Based on the clinical listing is there a need for a clinical assessment after the  last radiology time point’ has a value of ‘Yes’ provide an additional clinical time point.
+•	Time Point Name – populates as the next consecutive number after the last radiology time point. If radiology is screening only the time point name display as Timepoint 2. 
+•	Min and Max Exam dates – populate with n/a.
+•	Overall PET + Clinical Response opens blank – required 
+•	Overall CT + Clinical Response opens blank– required
+•	Overall PET+CT+Clincial Response opens blank – required
+•	Designated PET+CT+Clinical Response opens blank - required
+•	Clinical Data – required
+•	Clinical Exam Date opens blank– required
+o	Allow a clinical exam date window to extend to local system date from the Max date of last Radiology time point +<x>  Clinical exam date of the last radiology time point +1 days when there’s clinical data after the last radiology time point assessment
+o	Allow a clinical exam date window to extend to local system date from the <Start Date> for screening only time points.
+•	Clinical Data Comment- required with ‘Other, comment’ selected for Clinical Data, else optional.
+
+Requirement and Description
+BRS-OS5QA-090 Field text: Overall  PET + CT and Clinical Date of Progression
+[Control name: DateProgressionCTPETClinical]
+Rule	Answer Option	Logic
+This field is read-only.	Date (dd-Mmm-yyyy)
+n/a	Display the Designated Overall PET + CT + Clinical TPR date associated with the first instance of PD, else populate with n/a.
+
+Requirement and Description
+BRS-OS5QA-105 Field text: Overall PET+CT and Clinical Date of First Response
+[Control name: DateFirstResponseCTPETClinical]
+Rule	Answer Option	Logic
+This field is read-only.	Date (dd-Mmm-yyyy)
+n/a 	Display the Designated Overall PET+CT+Clinical TPR date associated with CR or PR, whichever status is recorded first, for subject whose Designated Overall PET +CT+ Clinical Best Response is either a CR or a PR, else populate with n/a.
+
+Requirement and Description
+BRS-OS5QA-120 Field text: Overall CT+PET and Clinical Best Response
+[Control name: BestResponseCTPETClinical ]
+Rule	Answer Option	Logic
+This field is read-only.	•	Complete Response (CR)
+•	Partial Response (PR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Not Evaluable (NE)
+•	Not Applicable (NA)	Defined as the best Designated Overall CT +PET + Clinical TPR recorded for the subject, prior to or including TPR of PD.
+Hierarchy for ‘best’ to worst’ = NA NEDCRPRSD  PDNE
+
+
