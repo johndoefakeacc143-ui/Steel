@@ -1,0 +1,860 @@
+General Requirements
+Display Requirements
+Requirement	Requirement Description
+BRS-DR-001	Display subject identifiers (including site number) within the blind code selection screen.
+BRS-DR-005	Display the Protocol number [000000] in BioREAD from the Read Project Name field stored in the ReadProject table within the project selection screen.
+BRS-DR-010	Display case numbering as a randomly generated blind code.
+BRS-DR-015	Display the client name as defined in BioPACS (study configuration).
+BRS-DR-020	Display the time point identifier as following:
+•	Session 1 = < Screening > 
+•	Session 2 = Timepoint 2, Timepoint 3, etc. load follow-up time points in sequential order, by exam date
+•	Session 3 = Global Review
+•	Session 4 = Adjudication
+•	Session 5: Clinical review 
+BRS-DR-025	Display the reader identifier as recorded in the database for the active reader.
+BRS-DR-035	Display the activated time point exam date (dd-mmm-yyyy) for each time point in Sessions 1 and 2. If there are multiple exam dates the min-max dates will show.
+BRS-DR-040	Provide a summary for Sequence Details to display in all Sessions, for all sequences within the thumbnail panel(s) as they load with the following information, retain values from time point to time point.
+•	Time Point: Session 1 Baseline, Session 2 Time Point 2, Time Point 3, etc.
+•	Sequence Name: type anatomy (example CT Head, MR Neck, etc.)
+•	Sequence Modality: type (example: CT, MR, etc.)
+•	Exam Date: Actual scan date (DD-MMM-YYYY)
+BRS-DR-050	Upon signing into BioREAD application the user must be able to successfully open a given blind code, when selecting either “eCRF” or “eCRF and Imaging” on the eCRF Dashboard.
+BRS-DR-055	Upon signing into BioREAD application must require a Start Date at Screening time point value configured in BioPACS for the subject, if no such date is added do not allow the reader to continue with assessment, display error message:
+•	“Project Manager needs to add Start Date for this subject”
+Once the reader clicks ‘OK’ the form will close and return the reader to the Blind Code Section screen.
+BRS-DR-055	Upon signing into BioREAD application must require a Start Date at Screening time point value configured in BioPACS for the subject, if no such date is added do not allow the reader to continue with assessment, display error message:
+•	“Project Manager needs to add Start Date for this subject”
+Once the reader clicks ‘OK’ the form will close and return the reader to the Blind Code Section screen.
+BRS-DR-065	Display a field ‘Disease Indication’ [PS1.1][AL1.2]on the eCRF in all Sessions in read only. Value can be obtained using:
+•	Hardcoded value < CLL/SLL >
+Reader Allocation 
+Requirement	Requirement Description
+BRS-RA-001	The system must:
+•	Support two readers in Session 1, 2 and 3
+•	Support one adjudicator in Session 4.
+•	Support one clinical reader in Session 5
+•	Support ‘Reviewer’ reader type in all Sessions
+BRS-RA-005	A case is selected for adjudication if discrepant between the two primary readers when the answers do not match exactly for the following endpoint(s) at time point level:
+1.	Focal Time Point Response [Control name: FocalTimePointResponse]
+2.	Organ Time Point Response [Control name: OrganTimePointResponse]
+BRS-RA-010	Assign 1, or 2 at Screening based on the order in which the Screening time point is read.[PS2.1][AL2.2]
+Example: Reader who completes Screening first will have PrimaryReadNumber as 1.
+Primary read number at screening will be carried forward to all follow-up time points and Global session.
+Store values to the database
+Fieldtext: Primary Read Number at Screening, Follow-up and Global
+ [Control name: PrimaryReadNumber]
+For Intra Read primary number will be: Intra
+For Inter Read primary number will be: Inter
+BRS-RA-015	Adjudicator to be allowed to assess only the assessment (Focal TPR or organ TPR or both) which is discrepant between the two readers per condition at BRS-RA-005. The other assessment questions (select the accepted reader, rationale, reason for accepted result selection and reason for discordance) to be disabled. The other fields to be saved as blank for adjudicator. 
+BRS-RA-020	Enforce that intra-read cases are only allocated to the reader after 28 days have passed from the date, they were original read by the reader.
+Image Data Handling 
+Requirement	Requirement Description
+BRS-IDH-001	Display the following in Sessions 1, 2, 3 and 4:
+•	Business Modality: CT/MR/ PET-CT /X-Ray/NM/PET/PET-MR
+•	Anatomical Area: All
+BRS-IDH-005	Imaging must display in READ ONLY fashion:
+•	Sequence Modality: PT
+•	Business Modality: X-Ray/NM/PET
+BRS-IDH-006	Include 4x1 and 3x1 grids added in ImageDisplay for users to view datasets.
+BRS-IDH-015	Do not allow Target and Non-Target lesion label (T/NT) assignments, at any follow-up time points, when no such label was added in Session 1.
+BRS-IDH-020	Allow New lesion assessment at all assessable follow-up time point.
+BRS-IDH-025	When drawing an ROI on Image Display using the Free Form tool, display the LDi and SDi values as (rounded to <0> decimal precision based on bankers rounding.)
+Note: decimal precision will match what is configured for Final LDi/SDi values at BRS-LT-001 & BRS-LT-005.
+Technical Adequacy Assessment 
+Requirement	Requirement Description
+BRS-TAA-001	The system must ask the following question in Sessions 1 & 2:
+Question text: Are the images technically adequate? 
+[Control name: ImageAdequacy]
+Answer Options
+•	Optimal
+•	Readable, but not Optimal
+•	Not Readable	Logic
+•	One answer required
+•	Disable for selection, and default to ‘Not Readable’ if no images are loaded for the time point.
+•	Enable next question (BRS-TAA-005) if other than Optimal, else remains disabled.
+
+BRS-TAA-005	The system must ask the following question in Sessions 1 & 2:
+Question text: Give at least one reason for the images being Readable, but not Optimal, or Not Readable. 
+[Control name: ImageAdequacyReason]
+Answer Options
+•	Artifact
+•	Inadequate contrast
+•	Inadequate chest
+•	Inadequate abdomen
+•	Inadequate pelvis
+•	Inadequate <neck>
+•	Missing chest
+•	Missing abdomen
+•	Missing pelvis
+•	Missing <neck>
+•	Site drawn ROI or measurement present
+•	Subject motion
+•	Time point missing
+•	Other, specify	Logic
+•	One answer required, multiple allowed when enabled.
+•	If there are no image files for the time point, the system must auto-populate the answer with ‘Time point missing’ and disable all other options.
+•	If there is at least one image available for the time point, the system must disable the answer option ‘Time point missing’.
+•	Enable a required text comment box if ‘Other, specify’ is selected [Control name: OtherSpecify].
+Lesion Labeling/Tracking 
+Requirement	Requirement Description
+BRS-LT-035	When Extranodal site location ‘Muscle’ or ‘Soft Tissue’ or ‘Subcutis’ (Target, Non-Target and New) is selected require response for:
+•	‘Muscle/Soft Tissue/Subcutis, specify’ with the following options:
+•	Abdominal Left upper quadrant 
+•	Abdominal Left lower quadrant
+•	Abdominal Right upper quadrant
+•	Abdominal Right lower quadrant
+•	Upper Arm Left
+•	Upper Arm Right
+•	Forearm Left
+•	Forearm Right
+•	Elbow Left
+•	Elbow Right
+•	Axilla Left
+•	Axilla Right
+•	Hand Left
+•	Hand Right
+•	Lower Leg Left
+•	Lower Leg Right
+•	Thigh Left
+•	Thigh Right
+•	Knee Left
+•	Knee Right
+•	Foot Left
+•	Foot Right
+•	Forehead 
+•	Above the eyebrow
+•	Nose
+•	Around the mouth
+•	Cheek Left
+•	Cheek Right
+•	Upper Back Left
+•	Upper Back Right
+•	Lower Back Left
+•	Lower Back Right
+•	Buttock Left
+•	Buttock Right
+•	Chest Left
+•	Chest Right
+•	Chin
+•	Head
+•	Inguinal Region 
+•	Neck
+BRS-LT-070	Apply the following edit check in all F/U timepoints with technical adequacy of ‘Optimal’ or ‘Readable but not Optimal’: 
+
+Upon sign off application must check if there at least one lesion (Target, Non-Target or New) with Lesion Status of ‘Not present; images not available’, display the following message:
+•	‘You have indicated lesion(s) as ‘Not present, images not available’, if images of the lesion(s) are truly missing, make sure that the missing exam is noted in the Technical Adequacy. If images are not missing, but rather the lesion cannot be seen because it has resolved, or has been surgically removed, or cannot be seen due to technical factors or underlying pathology, then use the Ellipse Tool to annotate the region where the lesion used to be seen.’ (Ok)
+Reader must click ‘Ok’ to acknowledge/close the message, no change is required. 
+
+Target Lesions 
+Requirement	Requirement Description
+BRS-TLL-001	Identify target lesions in Session 1 (Baseline), with the following label: T1 – T6.  Each label will only be used once.
+BRS-TLL-005	Limit the maximum number of target lesions to six (6).
+BRS-TLL-020	Image display must offer a Split option in the lesion context screen at Follow-up to assign one or more established target lesion label(s) to an already assigned target lesion label.
+•	Lesion labels must accommodate splitting of target lesions. (e.g., T1.1, T1.2, etc.). 
+BRS-TLL-025	Target nodal lesions are drawn with the Free Form tool (precision boundary).
+BRS-TLL-026	When placing a draw on the image using the Ellipse tool in Session 2, provide the following options in the context menu:
+•	Not Present/Resolved
+•	Not Evaluable Due to Technical Issues
+•	Not Evaluable Due to Underlying Pathology
+•	Not Evaluable Due to Focal Intervention
+o	Once a Lesion has the status of ‘Not Evaluable Due to Focal Intervention’ in all subsequent assessable time point only provide this option in the context menu ‘Not Evaluable Due to Focal Intervention’. 
+BRS-TLL-035	Measure and capture the measurements for nodal target lesions in two dimensions by the size of the LDi and SDi.
+BRS-TLL-040	Require all Target lesion(s) labeled in Session 1, are assigned using the same drawing tool (free form) in each assessable time point in Session 2 (Follow-up).
+•	If not assigned, upon signoff apply the status of ‘Missing due to Not Readable Time Point’ with a technical adequacy response of ‘Not Readable’ in Session 2.
+BRS-TLL-045	When assigning a target lesion, require a lesion drawn with the free form tool to have a value >0 in both axis (LDi and SDi). For example, a ROI drawn with LDi=5 mm and SDi=0 when right click do not provide the context menu to add or assign the ROI.
+BRS-TLL-050	Lesions that fall below 5mm, either node, will be assigned a default value of 5 mm for the axis (LDi and/or the SDi) with the exception on BRS-TLL-046 when applicable.
+A lesion will only be assigned a status of TSTM when the response value SA for nodal and LD for extranodal have a recorded final value of 5mm due to default added. 
+This rule also applies to target lesions that split, and the fragment(s) that fall below the TSTM threshold of 5mm.
+For Example: A nodal lesion that previously measured 18 mm  15 mm decreased to 4 mm  4 mm.  Assign a status TSTM and 5 mm  5 mm will be recorded for the purpose of calculating final response.  If only one (1) axis fell below the TSTM threshold, only that measurement will be recorded with the default of 5mm applied, (e.g., a nodal lesion now measuring 6mm x 4mm would have the 5mm default applied to the SDi and would have a status of TSTM. If these same measurements exist for an extranodal lesion, the default of 5mm would be applied to the SDi, however the TSTM status would not apply because the LDi is >5mm.)
+BRS-TLL-055	Image Display must offer a Merge option in the lesion context screen at Follow-up to assign one or more established Target lesion label(s) to an already assigned target lesion label.
+•	System applies a status of Merged-Not Present [LESION LABEL] to the established label(s).
+•	Target lesions with a merged status of “Merged – Not Present [LESION LABEL]” will not count as missing when determining time point response. LD/SA will be defaulted to ‘0’ this is not a calculation.
+
+Non-Target Lesions 
+Requirement	Requirement Description
+BRS-NTLL-001	Identify non-target lesions in Session 1 (Screening) with the following label: NT1 – NT10.  Each label will only be used once.
+BRS-NTLL-005	Limit the maximum number of non-target lesions to ten (10).
+BRS-NTLL-010	Non-target lesions are drawn using Rectangle tool (box tool).
+BRS-NTLL-012	When placing a draw on the image using the Ellipse tool in Session 2, provide the following options in the context menu:
+•	Not Present/Resolved
+•	Not Present Evaluable Due to Technical Issues
+•	Not Present Evaluable Due to Underlying Pathology
+•	Not Present (surgical intervention) Evaluable Due to Focal Intervention
+•	Once a Lesion has the status of ‘Not Present (surgical intervention) Evaluable Due to Focal Intervention’ in all subsequent assessable time point only provide this option in the context menu ‘Not Present (surgical intervention) Evaluable Due to Focal Intervention’.
+BRS-NTLL-020	Require all Non-Target lesions labeled in Session 1, are assigned using the same drawing tool (rectangle tool) in each assessable time point in Session 2 (Follow-up).
+•	If not assigned, upon sign off apply the status of ‘Missing due to Not Readable Time Point’ with a technical adequacy response of ‘Not Readable’ in Session 2.
+BRS-NTLL-025	When assigning an ROI in Session 2 to a nodal lesion with any previous status of ‘Not present, resolved ’or ‘Present and Normal’ provide the following status options in the context menu:
+•	Present
+•	Present and Normal
+•	Present with Progression 
+BRS-NTLL-030	When assigning an ROI in Session 2, to a non-target extranodal lesion (with the exception of BRS-NTLL-035 and BRS-NTLL-040) with any prior status of ‘Not Present, resolved’ provide the following status option in the context menu:
+•	Present with Progression
+BRS-NTLL-035	When assigning an ROI in Session 2, to a non-target extranodal lesion with the following site locations; Pleural Effusion, Pericardial Effusion or Ascites and no prior status of ‘not present, resolved’ – provide the following status options in the context menu:
+•	Present
+BRS-NTLL-040	When assigning an ROI in Session 2, to a non-target extranodal lesion with the following site locations with any prior status of ‘Not Present, resolved’; Pleural Effusion, Pericardial Effusion or Ascites – provide the following status options in the context menu:
+•	Present
+
+New Lesions 
+Requirement	Requirement Description
+BRS-NLL-001	Identify new lesions in Session 2 (Follow-Up) with the following label: Nn (where n = the new lesion number, e.g., N1, N2, N3).  Each label will only be used once.
+BRS-NLL-005	Limit the maximum number of new lesions to -1.
+BRS-NLL-010	New nodal lesions and extranodal are drawn using the Free Form tool (precision boundary) measurements will be captured.
+BRS-NLL-015	Measure and capture the measurements for nodal and extranodal new lesions in two dimensions by the size of the LDi and SDi.
+BRS-NLL-020	When adding/assigning an new lesion, require a lesion drawn with the free form tool to have a value >0 in both axis (LDi and SDi). For example, a ROI drawn with LDi=5 mm and SDi=0 mm when right click do not provide the context menu to add or assign the ROI.
+BRS-NLL-022	The context menu when adding (initial draw) an ExtraNodal lesion label with an LDi <10mm, must include a response for, “Please confirm that the lesion is attributable to CLL/SLL?” with the following answer options: 
+•	Yes 
+•	No
+If “Yes” is selected, allow the lesion to be saved.
+If “No” is selected, do not allow the lesion to be saved. Reader to receive a warning message “Per protocol, extranodal with LDi<10mm should only be selected when they contribute to CLL/SLL. Please remove the lesion ROI”.
+Only required at initial draw. Question is not required for extranodal ≥10mm.
+Save [Control name: NewSmallExtranodalLesionConfirmation] when ‘Yes’ is the value
+
+BRS-NLL-025	Require all New lesions labeled, are assigned in each sequential assessable time point, using the same drawing tool (free form) in Session 2 (Follow-up).
+•	If not assigned, upon sign off apply the status of ‘Missing due to Not Readable Time Point’ with a technical adequacy response of ‘Not Readable’ in Session 2.
+BRS-NLL-030	Allow New extranodal lesion ROIs to be captured using the Rectangle tool. (box tool). Measurements will not be captured.
+BRS-NLL-032	When placing a draw on the image using the Ellipse tool in Session 2, provide the following options in the context menu:
+•	Not Present/Resolved
+•	Not Present Evaluable Due to Technical Issues
+•	Not Present Evaluable Due to Underlying Pathology
+•	Not Present (surgical intervention) Evaluable Due to Focal Intervention
+Once a Lesion has the status of ‘Not Present (surgical intervention) Evaluable Due to Focal Intervention’ in all subsequent assessable time point only provide this option in the context menu ‘Not Present (surgical intervention) Evaluable Due to Focal Intervention’.
+Spleen Labeling/Tracking
+1.	Spleen ()
+Requirement	Requirement Description
+BRS-SSI-001	Identify the first and last slice on which the spleen is visualized with the following labels: SF and SL in each time point (Session 1 & 2). Each label will only be used once
+BRS-SSI-005	Image Visualization must provide a context menu when the reader right clicks on the Image to indicate First and Last Slice of the Spleen.
+BRS-SSI-010	Image Visualization must provide a context menu when the reader right clicks on the Image to clear the indicated First and Last Slice of the Spleen, prior to signing off on the time point.
+BRS-SSI-015	System must not allow the reader to select indicated slices on two different sequences, by not enabling the option of labeling first or last when indicated on a different sequence.
+BRS-SSI-020	Calculating the Spleen size: LVD=Absolute difference between Slice location of first slice and last slice + Absolute difference between slice location of last slice and last slice-1.
+BRS-SSI-025	A Screening LVD > 130 mm will be considered enlarged, abnormal. 
+BRS-SSI-030	Spleen measurements ≤130 mm will be considered normal.
+BRS-SSI-035	If the LVD is > 130 mm, the measurement in excess of 130 mm will be defined as the Abnormal Spleen Value (ASV). Note: if the Screening spleen measurement is  130 mm, the ASV at Screening will be captured as 0 mm.
+BRS-SSI-040	Application must store the following location values (blank if LVD = n/a) to a hidden field within the database:
+1.	First slice location (Control Name: SpleenFirstSliceLocation)
+2.	Last slice location (Control Name: SpleenLastSliceLocation)
+3.	Next to last slice location (last slice – 1) (Control Name: SpleenNextToLastSliceLocation)
+4.	Spleen slice thickness: (absolute difference-SpleenNextToLastSliceLocation-SpleenLastSliceLocation) (control name: SpleenSliceThickness)
+2.	Tracking Panels ()
+Requirement	Requirement Description
+BRS-LT-000	Edit checks upon sign off:
+Application must check when target/index lesions are added the SPD (Session 1 and Session 2) has a numeric value, or value of n/a when warrant.
+•	Prevent the reader from completing the time point if this task is not met, display error message”.
+o	A technical issue has been detected, Please pause the case due to technical issues, and leave a comment that the SPD does not have a numeric value.
+Application must check when target/index/new lesions are assigned, all lesion measurements (Session 1 and Session 2) and percent change (Session 2) have a numeric value, or value of n/a when warrant (refer to tracking target/index lesions requirements  for designation of n/a).
+•	Prevent the reader from completing the time point if this task is not met, display the following error message:
+A technical issue has been detected. Please pause the case due to technical issues and leave comment on which numerical field(s) are blank.
+BRS-LT-001	The eCRF must provide a ‘Target Lesion Summary’ panel in Sessions 2 and 3, using incremental calculation (mm) captured according to bankers rounding, for each identified target lesion with the parameters listed below:
+•	Time Point (masked as appropriate)
+•	Label (ROI ID assigned at screening)
+•	Slice # of ROI 
+•	Actual LDi (pulls the true longest diameter measurement from within the added ROI (rounded to <2> decimal precision) 
+•	Final LDi (mm) (longest diameter measurements with defaults applied, (rounded to <0> decimal precision)  
+•	Actual SDi (mm) (pulls the true shortest diameter measurement from within the added ROI, (rounded to <2> decimal precision)  
+•	Final SDi (mm) (shortest diameter measurements with defaults applied, (rounded to <0> decimal precision) 
+•	Final PPD (mm) (sum of final cross product (LDi x SDi) defaults applied) (rounded to <0> decimal precision)
+•	Absolute Change Nadir LDi (mm) - (Calculated change in LDi from the smallest value across time points (Current LDi – nadir LDi)) (rounded to <0> decimal precision) Populate with n/a if lesion is ‘missing’ in the current time point. Populate with n/a in the present and all subsequent time point if the lesion has merged. 
+•	% Change Nadir LDi – Calculated as (Absolute Change Nadir LDi /Nadir LDi)*100. (rounded to <1> decimal precision). Populate with n/a if lesion is ‘missing’ in the current time point. 
+•	% Change Nadir PPD ((current product of perpendicular diameters minus the lowest product of perpendicular diameters previously recorded) divided by the lowest product of perpendicular diameters previously recorded, multiplied by 100., (rounded to <1> decimal precision) Populate with n/a if lesion is ‘missing’ in the current time point.
+o	[((Current PPD – Nadir PPD) / Nadir PPD) * 100]
+•	Lesion Status 
+BRS-LT-005	The system must display the following data in the Target Lesions Sums for the Target Lesions:
+•	Time Point (masked as appropriate)
+•	Response SPD (Display the calculated cross product sum (defaults applied) for the time point) (rounded to <0> decimal precision)  
+o	If there are no target lesions at screening, this is ‘n/a’ for all timepoints
+o	If all lesions are not evaluable, this is ‘n/a’
+•	% Change Screening SPD ((Current Response SPD – Screening Response SPD)*100)/Screening Response SPD), (rounded to <1> decimal precision)  
+o	At screening, this is always ‘n/a’
+o	If there are no target lesions at screening, this is ‘n/a’ for all timepoints.
+o	% Change screening SPD is calculated if all lesions are evaluable but if any one lesion at current timepoint is non-evaluable, this is ‘n/a’ 
+•	% Change Nadir SPD ((Current Response SPD – Nadir Response SPD)*100)/Nadir Response SPD), (rounded to <1> decimal precision)  
+o	At screening, this is always ‘n/a’ 
+o	If there are no target lesions at screening, this is ‘n/a’ for all timepoints.
+o	If all lesions are not evaluable, this is ‘n/a
+                % change nadir SPD is always calculated based on numeric SPD value of lesions that are evaluable
+Note: if there are one or more target lesions ‘missing’ at a time point, then SPD of this time point must not be considered while calculating nadir SPD. 
+BRS-LT-010	The eCRF must provide a summary for ‘Non-Target Lesions Summary’ values in Sessions 2 and 3 captured for each identified non-target lesion with the parameters listed below:
+•	Time point (masked as appropriate)
+•	Label (assigned ROI ID)
+•	Location (assigned at screening)
+•	Lesion Status (selected by the reader when applicable)
+BRS-LT-015	The eCRF must provide a summary for ‘New Lesions’ values in Sessions 2 and 3 captured for each identified new lesion with the parameters listed below:
+•	Time point (masked as appropriate)
+•	Label (assigned ROI ID)
+•	Location (assigned at initial draw)
+•	Actual LDi (mm) (pulls the true longest diameter measurement from within the added ROI (rounded to <2> decimal precision) value will be blank for new lesions added with box tool
+•	Final LDi (mm) (longest diameter measurements (rounded to <0> decimal precision) value will be blank for new lesions added with box tool
+•	Actual SDi (mm) (pulls the true shortest diameter measurement from within the added ROI, (rounded to <2> decimal precision) value will be blank for new lesions added with box tool
+•	Final SDi (mm) (shortest diameter measurements, (rounded to <0> decimal precision) value will be blank for new lesions added with box tool
+•	Lesion Status: (selected by the reader when applicable)
+BRS-LT-018	The system must display the following data in the “Spleen Summary” in Sessions 2, 3, and 5: 
+•	Time point (mask as appropriate)
+•	Spleen label 
+•	Scan interval
+•	Spleen LVD ((mm)Longest Vertical Diameter (LVD) (Longest Vertical Diameter = Absolute difference between Slice location of first slice and last slice + Absolute difference between slice location of last slice and last slice-1.)
+•	ASV (mm)
+•	Absolute Change Nadir LVD (mm) - (Calculated change in LVD from the smallest value across time points (Current LVD – nadir LVD)) (rounded to <0> decimal precision) Populate with n/a if lesion is ‘missing’ in the current time point.
+•	% Change Screening ASV  = [((Current ASV – Screening ASV) / Screening ASV) * 100)]
+•	% Change Nadir ASV = [((Current ASV – time point with lowest ASV) / Nadir  ASV) * 100)]
+•	Spleen status
+•	Comment on Changed Spleen Status, if available (CommentChangingSpleenStatus)
+•	Spleen response
+BRS-LT-020	The eCRF must provide a summary for ‘Liver Summary’ values in Sessions 2, 3 and 5 captured for each time point with the parameters listed below:
+•	Time point (masked as appropriate)
+•	Liver Status
+•	Liver Response (recorded response for the time point)
+•	Comment on Liver Response 
+BRS-LT-025	The eCRF must provide ‘Time Point Summary’ with the values for each previous assessed time point in Session 2 and 3, with the follow fields:
+•	Time point (masked as appropriate)
+•	Min Exam Date (date as recorded in BioPACS)
+•	Max Exam Date (date as recorded in BioPACS)
+•	Target Response (recorded response for the time point)
+•	Non-Target Response (recorded response for the time point)
+•	# of New Lesions (# of New lesions added in the given time point)
+•	Focal Time Point Response (recorded response for the given time point)
+•	Spleen response (recorded response for the time point)
+•	Liver Response (recorded response for the time point)
+•	Organ Time Point Response (recorded response for the given time point)
+•	Transient Enlargement Unrelated to CLL/SLL (answer options Yes/No)
+•	Reason for Re-assessment (selected answer option(s), will only display when time point has been reassessed)
+•	Reader Comment (text provided by the reader for the given time point, if no text was added field will be blank)
+BRS-LT-030	Display the Screening Comment in the Time Point Summary Panel at each time point in Session 2 and 3. If no text is provided field will be blank.
+BRS-LT-035	Provide an informational panel labeled ‘Muscle/Soft Tissue/Subcutis Specify’ with the following parameters in Sessions 2, 3, 4 and 5 when site location ‘Muscle’ or ‘Soft Tissue’ or ‘Subcutis’ is added, else hide: 
+•	Label (lesion label) 
+•	Location (Muscle or Soft Tissue or Subcutis) 
+•	Specify (recorded response for ‘Muscle/Soft Tissue/Subcutis, specify’) 
+Session 1: Screening Lesion Selection and Boundary Determination
+Session 1 Data Display ()
+Requirement	Requirement Description
+BRS-S1DD-001	Display the following information for each target lesion:
+•	Label
+•	Slice number of ROI
+•	Location
+•	LDi (mm) (use final values)
+•	SDi (mm) (use final values)
+BRS-S1DD-005	Display the following information for each non-target lesion:
+•	Label
+•	Slice number of ROI
+•	Location
+BRS-S1DD-010	Display the following information for the Spleen on the eCRF:
+•	Spleen LVD (mm): calculated value
+Session 1 Questions and Answers ()
+Requirement and Description
+BRS-S1QA-001 Field text: Spleen Status:
+[Control name: SpleenAssessment]
+Rule	Answer Option	Logic
+Ask this question if Optimal or Readable, but not optimal is selected for technical adequacy.
+Populate with ‘Not present due to technical issues’ if Not Readable selected for technical adequacy.	•	Normal 
+•	Enlarged (non-selectable)
+•	Not present due to technical issues
+•	Not present – images not available
+•	Not present – surgery	One required answer.
+•	Answer is Auto-Populated.
+•	Answer is Read Only unless answer cannot be determined through auto-population rules.
+•	If “Not present – surgery” is selected, auto-populate to “Not present – surgery” for all follow-up time points.
+•	Auto-populate to “Normal” if the LVD≤130 mm.
+•	Auto-populate to “Enlarged” if the LVD > 130 mm. Allow the reader to edit the derived response of Enlarged to Normal, require a comment.
+
+Requirement and Description
+BRS-S1QA-002 Field Text: Comment on your rational for changing the Spleen Status:
+[control name: CommentChangingSpleenStatus]
+Rule	Answer Option	Logic
+Provide visible comment box on eCRF when Spleen Status is changed from Enlarged to Normal. 	Text	Required when visible.
+
+Requirement and Description
+BRS-S1QA-005 Field text: Liver Status:
+[Control name: LiverAssessment]
+Rule	Answer Option	Logic
+Ask this question if Optimal or Readable, but not optimal is selected for technical adequacy.
+Populate with ‘Not present due to technical issues’ if Not Readable selected for technical adequacy.	•	Normal
+•	Abnormal
+•	Not present due to technical issues
+•	Not present images not available	•	One required answer selected by the reader when enabled.
+
+Requirement	Requirement Description
+BRS-S1QA-015	Provide a text comment box labeled: “General Comments” do not require a value, optional [Control name: GeneralComment]
+
+
+Requirement and Description
+BRS-S1QA-020 Field text: Time Point Response Date
+ [Control name: TimePointResponseDate] 
+Rule	Answer Option	Logic
+Hidden Field
+Default to ‘n/a’ with a technical adequacy response of ‘Not Readable’ for the time point, due to ‘Time point missing’	Date 
+(DD-MMM-YYYY)	To follow same logic as for timepoints with TPR response not equal to PD at BRS-S2QA-040
+•	Auto populate with  <latest> date associated with the imaging time point 
+Session 2: Follow-Up Time Points
+Target Lesion Response ()
+Note: Calculate response in the following order: NE (if Not Readable TP), NA, CR, PD, NE, PR, or SD.
+Requirement	Requirement Description	Target Response
+BRS-ILR-001	All nodal target lesions have an LDi < 15 mm.	CR
+BRS-ILR-005	In cases where multiple target lesions are identified at screening: % SPD Change from Screening must decrease by ≥ 50% compared to screening and criteria for CR, PD or NE is not met.	PR
+BRS-ILR-010	In cases where there is only a single target lesion identified at Screening, the PPD of that lesion must decrease by ≥50% and criteria for CR, PD or NE is not met.	PR
+BRS-ILR-015	Populate with SD if all other criteria (CR, PR, PD, NE or NA) have not been met. 	SD
+BRS-ILR-025	In order to have a response of PD, an individual nodal lesion must meet the following three (3) conditions:
+1.	The lesion must be considered abnormal (the lesion must have an LDi of ≥15 mm).
+2.	The lesion must have a ≥50% in LDi from nadir.
+Note: If nadir LDi is 0 and LDi at current time point is numeric and non-zero then condition 2 is considered true.
+3.	LDi of the lesion at the time point must have increased by 5 mm from nadir LDi.
+Note: Nadir time point for a lesion is the time point with lowest LDi of all prior time points. 
+Note: for split lesions, the sums of LDi should be included when comparing to nadir, not individual values. 
+•	When lesions merge and lesion is considered abnormal (#1) and the 50% increase (#2) is met the LDi or SDi increase (#3) is not required to derive PD.  
+o	LDi and SDi increase (#3) will no longer apply to the lesions in all subsequent time points once merged regardless if they are no longer merged.  
+
+Note: for lesions that merge, the application must add the LDi of the two (or more) lesions that have merged at the current time point and all prior timepoints to determine the nadir time point of the combined lesions, when calculating PD response. 
+
+Note: The Nodes showing the single lesion progression should be highlighted in red on the eCRF and target summary panels, in all the sessions.	PD
+BRS-ILR-030	Auto-populated NE when the time point is marked Not Readable.	NE
+BRS-ILR-035	The system must enforce; a response of NE will be assigned if the PPD of at least one 1 target lesion is missing and if criteria for PD is not met.	NE
+BRS-ILR-040	Auto-populated NA when no target disease is identified on the screening time point even if current timepoint is ‘Not Readable’	NA
+Non-Target Response ()
+Requirement	Requirement Description	Non-Target Response
+BRS-NIR-001	All extranodal non-target lesions must be ‘Not Present/Resolved’; and All nodal non-target lesions must be ‘Present and Normal’ or ‘Not Present/Resolved’.	CR
+BRS-NIR-005	Populate with SD if all other criteria (CR, PD, NE or NA) have not been met.	SD
+BRS-NIR-010	If at least one non-target lesion as the status of ‘Present with Progression’ for the time point.	PD
+BRS-NIR-015	Auto-populated NE when the time point is marked Not Readable.	NE
+BRS-NIR-020	Any one non-target lesion with a ‘missing’ status and none have the status of ‘present with progression’.	NE
+BRS-NIR-025	Auto-populated NA when no non-target disease is identified on the screening time point, even if current time point is ‘Not Readable’.	NA
+New Lesion Impact Criteria ()
+Requirement	Requirement Description	New Lesion Impact
+BRS-NEW-001	No new lesions (extranodal/nodal) are recorded.	No
+BRS-NEW-005	All new nodal lesions have an LD is < 15mm OR not evaluable and had been resolved or normal (LD <  15mm) at the last time point where it was evaluable. 
+And all new extranodal lesions are marked as resolved OR not evaluable and had been resolved at the last time point where it was evaluable.	No
+BRS-NEW-010	At least one (1) new extranodal lesion is present OR is not evaluable and had been present at the last time point where it was evaluable.	Yes
+BRS-NEW-015	At least one (1) new nodal lesion is present with a LD ≥15mm OR not evaluable and had been abnormal (LD ≥15mm) at the last time point where it was evaluable. 	Yes
+BRS-NEW-016	Time point not readable and no New lesion(s) have been added or all new lesion(s) added have resolved or normal at the last time point it was evaluable.	No
+BRS-NEW-017	Time point Not Readable and New lesion(s) have been added and not all new lesions (s) have resolved or normal at the last time point it was evaluable.	Yes
+Spleen Response 
+Spleen to be abnormal: LVD>130 AND status is also enlarged.
+Spleen to be Normal: LVD≤130 OR status is “Normal”
+
+Requirement	Requirement Description	Spleen Response
+Calculate the response in the following order: NE (if NR), NC, CR, PD, NE, PR, SD 
+BRS-SR-000 	Spleen Nadir is defined as the smallest LVD value including screening, up to but not including the current time point being assessed. 
+BRS-SR-001	The spleen response will be based on the first time point a spleen measurement is assessable (e.g., if the spleen is unevaluable at Screening and TP1, but a measurement can be made at TP2 onwards, then the spleen response for all subsequent time points will use the spleen measurement from TP2 for Reference time point. 
+BRS-SR-002 	Spleen response may require the spleen to be designated as ‘abnormal’ or ‘normal’ at current time, at reference or nadir time point: 
+•	A spleen with an LVD > 130 will be considered abnormal 
+A spleen with an LVD ≤ 130 mm will be considered normal 
+BRS-SR-003 	The reader can edit an ‘Enlarged’ Spleen Status (control name: SpleenAssessment) to ‘Normal’ as detailed within the requirement.  
+Once the Spleen Status has been updated, the Spleen designation will be ‘Normal’ and take precedence over the measurement designation noted in BRS-SR-002. 
+BRS-SRCR-001	An abnormal spleen at Reference time point has regressed to normal size (i.e., LVD ≤ 130 mm on study).	CR
+BRS-SRCR-005	An abnormal spleen at Reference time point and the reader changes the Spleen status from “enlarged” (LVD>130mm) to “normal” at the current timepoint.	CR
+BRS-SRPR-001	An abnormal spleen at reference time point remains abnormal at current time point, but the ASV has regressed by ≥ 50% from the reference ASV.	PR
+BRS-SRSD-001	An abnormal spleen at Reference time point remains abnormal at current time point, but the requirements for neither CR, PR nor PD have been met.	SD
+BRS-SRSD-005	If the spleen is normal at the Reference time point and becomes abnormal but does not meet PD criteria at the current time point, the Spleen Response will be reported as Stable Disease .	SD
+BRS-SRPD-001	An normal spleen at nadir has become abnormal ( LVD> 130 mm) has increased by  20 mm in the LVD, compared to nadir.	PD
+BRS-SRPD-010	An abnormal spleen at nadir that has increased by ≥ 50% in ASV compared to nadir and has increased by  10 mm in the LVD. 	PD
+BRS-SRPD-015	An abnormal spleen at Reference time point that regressed to normal size (i.e., demonstrated CR) and subsequently became abnormal with an increase of ≥ 20 mm in the LVD compared to nadir. 	PD
+BRS-SRNE-001	Auto-populated NE when the time point is marked Not Readable.	NE
+BRS-SRNE-005	The system must enforce the spleen are “Not Present due to technical issues”, or “Not Present – images not available” at any time point will result in NE.	NE
+BRS-SRNE-010	The system must enforce for the spleen that once a measurement has been recorded in any prior time point and in the current time point has a status of “Not Present, Surgery” results in NE.	NE
+BRS-SRNE-015	If the spleen cannot be measured at screening (e.g., if the spleen is unevaluable at Screening) and the spleen is abnormal at the first on-study time point measurement is recorded the Spleen Response will be reported as NE. 	NE
+BRS-SRNC-001	A normal spleen at Reference Time point remains normal at on study.	NC
+BRS-SRNC-005	Screening evaluation could not be made, but the spleen is considered normal at the first on-study time point where a measurement can be recorded.	NC
+BRS-SRNC-020	If the spleen is “Not Present Surgery” at Screening, the Spleen Response will be reported as No Change (NC) at all time points. 	NC
+BRS-SRNC-025	Screening evaluation could not be made, and the Spleen is deemed “Not Present, surgery’ at the first assessable on-study time point	NC
+Liver Response
+Liver to be Normal: status is “Normal”
+
+Requirement	Requirement Description	Liver Response
+BRS-LRCR-001	An abnormal liver at Reference time point has regressed to normal size.	CR
+BRS-LRSD-001	An abnormal liver at Reference time point remains abnormal. 	SD 
+BRS-LRPD-001	A normal liver at Nadir (prior)time point that has become abnormal or abnormal and worsened.	PD 
+BRS-LRPD-010	An abnormal Liver at screening that became normal at follow up, becomes abnormal.  	PD
+BRS-LRPD-015	An abnormal liver at screening has become abnormal and worsened	PD
+BRS-LRNE-001	Auto-populated NE when the time point is marked Not Readable.	NE
+BRS-LRNE-005	The system must enforce the liver are “Not Present due to technical issues”, or “Not Present – images not available” at any time point will result in NE.	NE 
+BRS-LRNE-015	If the liver cannot be measured at screening (e.g., if the liver is unevaluable at Screening) and the liver is abnormal at the first on-study time point measurement is recorded, the Liver Response will be reported as NE. 	NE 
+ BRS-LRNC-001	A normal liver at Reference time point remains normal.	NC
+BRS-LRNC-005	Screening evaluation could not be made, but the liver is considered normal at the first on-study time point where a measurement can be recorded.  	NC
+Session 2 Data Display ()
+Requirement	Requirement Description
+BRS-S2DD-001	Display the following information for each target lesion:
+•	Label
+•	Slice number of ROI
+•	Location
+•	LDi (mm) (use final values)
+•	SDi (mm) (use final values)
+•	PPD (mm)
+•	% Change Screening PPD
+•	% Change Nadir PPD
+•	Lesion Status
+BRS-S2DD-005	Display the following information for each non-target lesion:
+•	Label
+•	Slice number of ROI
+•	Location
+•	Lesion Status
+BRS-S2DD-010	Display the following information for each new lesion:
+•	Label
+•	Slice number of ROI
+•	Location
+•	LDi (mm) (use final values)
+•	SDi (mm) (use final values)
+•	Lesion Status
+BRS-S2DD-015	Display the following information for the Spleen on the eCRF:
+Spleen LVD: calculated value
+Session 2 Questions and Answers ()
+Requirement and Description
+BRS-S2QA-001 Field text: Spleen Status:
+[Control name: SpleenAssessment]
+Rule	Answer Option	Logic
+Ask this question if Optimal or Readable, but not optimal is selected for technical adequacy. 
+Populate with ‘Not present due to technical issues’ if Not Readable selected for technical adequacy.	•	Normal
+•	Enlarged (Not-Selectable)
+•	Not present due to technical issues
+•	Not present – images not available
+•	Not present – surgery	•	Once required answer.
+•	If “Not present – surgery” is selected, auto-populate to “Not present – surgery” for all subsequent time points.
+•	Auto-populate to “Normal” if the LVD =< 130 mm. Once auto populated to “Normal” do not allow reader to edit.
+•	Auto-populate to “Enlarged” if the LVD > 130 mm. Allow the reader to edit the derived response of Enlarged to Normal, require a comment.
+
+Requirement and Description
+BRS-S2QA-002 Field Text: Comment on your rational for changing the Spleen Status:
+[control name: CommentChangingSpleenStatus]
+Rule	Answer Option	Logic
+Provide visible comment box on eCRF when Spleen Status is changed from Enlarged to Normal. 	Text	Required when visible.
+
+Requirement and Description
+BRS-S2QA-005 Field text: Liver Status:
+[Control name: LiverAssessment]
+Rule	Answer Option	Logic
+Ask this question if Optimal or Readable, but not optimal is selected for technical adequacy. 
+Populate with ‘Not present due to technical issues’ if Not Readable selected for technical adequacy.	•	Normal
+•	Abnormal 
+•	Abnormal and worsened (to be an answer option only if Liver status at Screening/Reference time point is “Abnormal”)
+•	Not present due to technical issues
+•	Not present – images not available
+	One required answer selected by the reader when enabled.
+
+Requirement and Description
+BRS-S2QA-010 Field text: Spleen Response:
+ [Control name: SpleenResponse]
+Rule	Answer Option	Logic
+Always read only.
+	•	Complete Response (CR)
+•	Partial Response (PR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Non-Evaluable (NE) 
+•	No Change (NC)	Auto-populate a Spleen response-based requirements in at BRS-SR (Section 5.4)
+
+ (refer to examples in Appendix B)
+
+Requirement and Description
+BRS-S2QA-015 Field text: Liver Response:
+ [Control name: LiverResponse]
+Rule	Answer Option	Logic
+Always enabled
+
+
+	•	Complete Response (CR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Non-Evaluable (NE) 
+•	No Change (NC)	Auto-populate a Liver response-based requirements in at BRS-LR (Section 5.5)
+
+System to allow reader to change the autopopulated response.
+
+Requirement and Description
+BRS-S2QA-017 Field Text: Comment on Liver Response:
+[control name: CommentLiverResponse]
+Rule	Answer Option	Logic
+Always enabled
+	Text	Optional 
+
+Requirement and Description
+BRS-S2QA-020 Field text: Target Response:
+ [Control name: TargetResponse]
+Rule	Answer Option	Logic
+Always read only.
+	•	Complete Response (CR)
+•	Partial Response (PR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Non-Evaluable (NE) 
+•	Not Applicable (NA)	Auto-populate a Target response-based requirements in at BRS-ILR
+
+
+Requirement and Description
+BRS-S2QA-025 Field text: Non-Target Response:
+ [Control name: NonTargetResponse]
+Rule	Answer Option	Logic
+Always read only.
+	•	Complete Response (CR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Non-Evaluable (NE) 
+•	Not Applicable (NA)	Auto-populate a Non-Target response-based requirements BRS-NIR
+
+
+Requirement and Description 
+BRS-S2QA-031 Field text: New Lesions Impact 
+[Control name: NewLesionsImpact]
+Rule	Answer Option	Logic
+This is a hidden field and defaults to ‘No’ if timepoint is not readable	•	Yes
+•	No	•	Auto-populate based on response criteria rules (see BRS-NEW). 
+
+Requirement and Description
+BRS-S2QA-035 Field text: Focal Time Point Response 
+[Control name: FocalTimePointResponse]
+Rule	Answer Option	Logic
+Always read only.
+Default to NE with a technical adequacy response of ‘Not Readable’ for the time point and New Lesion Impact is No due to BRS-NEW-016.	•	No Evidence of Disease (NED)
+•	Complete Response (CR)
+•	Partial Response (PR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Non-Evaluable (NE)
+•	Not- Applicable (NA)	Auto-populate based on response criteria rules (TPR-005).  
+Auto-populate to Not-Evaluable (NE) if there is a prior TPR of CR and the derived TPR for the current time point is not CR or PD.
+
+Requirement and Description
+BRS-S2QA-037 Question Text: “You have indicated that Focal PD occurred immediately after two or more visits with a Focal response of NE. Are you confident that the progression occurred at this visit where you called PD, rather than on one of the preceding visits, which was NE?”
+[control name: FocalConfirmPDAfterNE]
+Rule	Answer Option	Logic
+Ask this question if the current Focal TPR is PD and the last two previous TPRs are NE, else hide this question.
+Example: 
+TP3 = NE, TP4 = NE, TP5 =PD – ask question
+TP3 = NE, TP4 = SD, TP5 = PD – do not ask question
+	Yes
+No	One answer required when visible
+
+Requirement and Description
+BRS-S2QA-040 Field text: Focal Time Point Response Date
+ [Control name: FocalTimePointResponseDate] 
+Rule	Answer Option	Logic
+Hidden Field
+Default to ‘n/a’ with a technical adequacy response of ‘Not Readable’ for the time point if due to no images available.	Date (DD-MMM-YYYY)
+n/a	For timepoints with TPR response (B-R-S-S2QA-035) not equal to PD
+•	Auto populate with <latest> date associated with the imaging time point 
+For timepoints with TPR response (B-R-S-S2QA-035) equal to PD
+•	Auto populate with <earliest> date associated with the imaging time point. 
+
+Requirement and Description
+BRS-S2QA-045 Field text: Organ Time Point Response 
+[Control name: OrganTimePointResponse]
+Rule	Answer Option	Logic
+Always read only.
+Default to NE with a technical adequacy response of ‘Not Readable’ for the time point.	•	No Evidence of Disease (NED)
+•	Complete Response (CR)
+•	Partial Response (PR)
+•	Stable Disease (SD)
+•	Progressive Disease (PD)
+•	Non-Evaluable (NE)	Auto-populate based on response criteria rules (TPR-001).  
+Auto populate to Not-Evaluable (NE) if there is a prior TPR of CR and the derived TPR for the current time point is not CR or PD.
+
+Requirement and Description
+BRS-S2QA-047 Question Text: “You have indicated that Organ PD occurred immediately after two or more visits with an Organ response of NE. Are you confident that the progression occurred at this visit where you called PD, rather than one of the preceding visits, which was NE?”
+[control name: OrganConfirmPDAfterNE]
+Rule	Answer Option	Logic
+Ask this question if the current Organ TPR is PD and the last two previous TPRs are NE, else hide this question.
+Example: TP3 = NE, TP4 = NE, TP5 =PD – ask question
+TP3 = NE, TP4 = SD, TP5 = PD – do not ask question
+	Yes
+No	One answer required when visible
+
+Requirement and Description
+BRS-S2QA-050 Field text: Organ Time Point Response Date
+ [Control name: OrganTimePointResponseDate] 
+Rule	Answer Option	Logic
+Hidden Field
+Default to ‘n/a’ with a technical adequacy response of ‘Not Readable’ for the time point if due to no images available.	Date (DD-MMM-YYYY)
+n/a	For timepoints with TPR response (B-R-S-S2QA-045) not equal to PD
+•	Auto populate with <latest> date associated with the imaging time point 
+For timepoints with TPR response (B-R-S-S2QA-045) equal to PD
+•	Auto populate with <earliest> date associated with the imaging time point. 
+
+Requirement	Requirement Description
+BRS-S2QA-055	Provide a text comment box labeled: “General Comments” do not require a value, optional
+ [Control name: GeneralComment]
+Session 3: Global Review
+Session 3: Data Display ()
+Requirement	Requirement Description
+BRS-S3DD-000	Upon opening Global Session, if there is a Non-PD Time Point Response (excluding NEs) that follows a Time Pont Response of PD, display the following pop-up message:
+•	“Response has been assessed at the current time point, following a prior progression event. Please review all lesion selections and measurements for accuracy. If transient lesion enlargement or transient new lesion appearance is suspected to be unrelated to CLL/SLL, please consider reassessing the progression time points”
+The reader must click ‘OK’ to acknowledge/close the message – no change is required.
+Session 3 Questions and Answers ()
+Requirement and Description
+BRS-S3QA-001 Field text: Provide any comments
+ [Control name: GeneralComments]
+Rule	Answer Option	Logic
+Always ask this question.	Text comment box	Optional
+  Re-Assessment ()
+Requirement	Requirement Description
+BRS-REA-001	Allow the user to reassess a selected time point, including screening by displaying a reassessment window with answers from Sessions 1 and 2, by clicking the reassessment button for the specific time point  .
+BRS-REA-005	Allow the user to Save reassessment answers – ‘Enable Edits ‘button is activated when signing off on the time point answers will be saved.
+The next time point if previously assessed will automatically open for Reassess, reader must indicate reason for change in order to signoff.
+If time point has not been previously assessed do not require reader to indicate reason for change.
+BRS-REA-010	Allow the user to exit the reassessment without saving changes as long as the Enable Edits button has not been selected.
+Questions and Answers Reassess ()
+Requirement and Description
+BRS-QAREA-001 Field text: Indicate reason for reassessment
+[Control name: ReassessReason]
+Rule	Answer Option	Logic
+Ask this question if the reader selects to reassess a time point.	•	Apparent outlier in tumor response trend, specify
+•	Target lesions, specify
+•	Non-target lesions, specify
+•	New lesions, specify (display in follow-up time points only)
+•	Spleen, specify
+•	Liver, specify
+•	Other, specify
+•	No change required	One required answer.
+
+Requirement and Description
+BRS-QAREA-005 Field text: Comment: 
+[Control name: ReassessComment]
+Rule	Answer Option	Logic
+Ask this question if one of the following answers was selected at BRS-QARA-001.
+•	Apparent outlier in tumor response trend, specify
+•	Target lesions, specify
+•	Non-target lesions, specify
+•	New lesions, specify
+•	Spleen, specify
+•	Liver, specify
+•	Other, specify	Text	Required.
+Requirement and Description
+BRS-QAREA-012 Field text: Is previous progression due to transient enlargement unrelated to CLL/SLL? 
+[Control name: ReassessTransientprogression]
+Rule	Answer Option	Logic
+This question is only visible during reassessment and if the Time Point Response is PD followed by a Time Point Response of Non-PD (at any time, not exclusively the next sequential visit).
+Maintain this answer in the time point eCRF if a Reset-Leave is performed of this timepoint or a prior timepoint.	•	Yes
+•	No	•	Default answer to No.
+•	If ‘Yes’ is selected, the application must require the reader edit their assessment. Do not allow reader sign off if ‘Yes’ is selected and no edits are made to the eCRF.
+•	If ‘Yes’ selected the application must recalculate the derived responses based on edits made during the reassessment, versus the PD previously derived for that time point. Do not allow sign off if ‘Yes” is selected and the derived response is still PD.
+•	If ‘No’ selected, no change is required
+Session 4 Adjudication () 
+Data Display
+Requirement	Requirement Description
+BRS-S4DD-001	Display the following for each time point assessed by each primary reader:
+•	Time point
+•	Min Exam date
+•	Max Exam date
+•	Target Response
+•	Non-Target Response
+•	# new lesions
+•	Focal TPR 
+•	Spleen status
+•	Comment on Changed Spleen Status, if available (CommentChangingSpleenStatus)
+•	Spleen response
+•	Liver Status
+•	Liver Response 
+•	Comment on Liver Response 
+•	Organ TPR 
+•	Transient Enlargement Unrelated to CLL/SLL (answer options Yes/No)
+•	Reason for Reassess
+•	    Follow-up time point comment (leave blank if no comment)
+General screening comment (leave blank if no comment)
+BRS-S4DD-005	Display the following information for each primary reader’s target lesions at each follow-up time point:
+•	Time point (mask as appropriate)
+•	Lesion label
+•	Lesion Location
+•	Slice # of ROI
+•	Final LDi (mm)
+•	Final SDi (mm)
+•	PPD (mm)
+•	Absolute Change Nadir LDi (mm)
+•	% Change Nadir LDi
+•	Lesion Status 
+Note: The Nodes showing the single lesion progression should be highlighted in red.
+BRS-S4DD-010	Display the following data in the Target Lesions Sums for the Target Lesions:
+•	Time Point (masked as appropriate)
+•	Response SPD (mm)
+•	% Change Screening SPD
+•	% Change Nadir SPD
+BRS-S4DD-015	Display the following information for each primary reader’s non-target lesions at each follow-up time point:
+•	Time point
+•	Lesion Label
+•	Lesion Location
+•	Status
+BRS-S4DD-020	Display the following information for each primary reader’s New lesions at each follow-up time point:
+•	Time point (mask as appropriate)
+•	Lesion label
+•	Lesion Location
+•	LDi
+•	SDi
+•	Lesion Status 
+BRS-S4DD-025	Display the following information for each primary reader’s Spleen Assessment at each follow-up time point:
+•	Time Point (masked as appropriate)
+•	Spleen Label (SF-SL)
+•	Scan Interval
+•	Spleen status
+•	Comment on Changed Spleen Status, if available (CommentChangingSpleenStatus)
+•	Spleen LVD
+•	ASV
+•	Absolute Change Nadir LVD (mm)
+•	% Change Screening ASV
+•	% Change Nadir ASV
+BRS-S4DD-027	Display the following information for each primary reader’s Liver Assessment at each follow-up time point:
+•	Time point (masked as appropriate)
+•	Liver Status
+•	Comment on Liver Response
+BRS-S4DD-030	Highlight differences in points of adjudication.
+BRS-S4DD-035
+	Display the following information for each primary reader:
+1.	Organ Time Point Response 
+2.	Focal Time Point Response
+Global review comment
+BRS-S4DD-040	Allow toggling of the display of Reader 1’s and Reader 2’s lesion ROIs.
+Session 4 Questions and Answers () 
+Requirement Description
+BRS-S4QA-001 Field text: Select one of the two readers for Focal Response:
+[Control name: Adjudication]
+Rule	Answer Option	Logic
+Always ask this question.	•	I agree with Reader 1’s subject assessment
+•	I agree with Reader 2’s subject assessment	One required answer.
+
+
+
+Requirement Description
+BRS-S4QA-002 Field text: Select one of the two readers for Organ Response
+ [Control name: OrganAdjudication]
+Rule	Answer Option	Logic
+Always ask this question.	•	I agree with Reader 1’s subject assessment
+•	I agree with Reader 2’s subject assessment	One required answer.
+
+
+Requirement Description
+BRS-S4QA-004 Field text: “I have reviewed all available images, case report forms, and results for both primary reads associated with this adjudication”
+ [Control name:AdjConfirmation]
+Rule	Answer Option	Logic
+Always ask this question.	Provide Boolean Check box
+In database will be blank or Yes	Require the reader to check the box.
+
+Requirement Description
+BRS-S4QA-005 Field text: Please provide rationale on your selection of the Accepted outcome in this Adjudication Provided for Focal Response
+[Control name: AdjudicationComment]
+Rule	Answer Option	Logic
+Always ask this question.	Text	Required.
+
+Requirement Description
+BRS-S4QA-006 Field text: Please provide rationale on your selection of the Accepted outcome in this Adjudication Provided for OrganResponse
+[Control name: OrganAdjudicationComment]
+Rule	Answer Option	Logic
+Always ask this question.	Text	Required.
+
+Requirement	Requirement Description
+BRS-S4QA-010	Field Name: Reason for Accepted Result Selection for Focal Response
+ [Control name: ReasonAcceptedResultSelection]
+For internal use only (NOT TO BE EXPORTED): the adjudicator will select one reason for the accepted readers result from the list below:
+•	Lesion measurement approach
+•	Lesion selection at baseline
+•	Determination of non-target progression or response
+•	Determination of new lesion
+BRS-S4QA-015	Field Name: What is the perceived reason for discordance in this case for Focal Response?
+[Control name: PerceivedReasonCaseDiscordance]
+For internal use only (NOT TO BE EXPORTED): the adjudicator will select one reason for perceived discordance from the list below:
+•	Justifiable medical differences.
+•	Error(s) made by the rejected reader.
+•	Image quality issues.
+BRS-S4QA-030	Field Name: Reason for Accepted Result Selection for Organ Response
+ [Control name: OrganReasonAcceptedResultSelection]
+For internal use only (NOT TO BE EXPORTED): the adjudicator will select one reason for the accepted readers result from the list below:
+•	Organ measurement approach
+•	Determination of spleen progression or response
+•	Determination of liver progression or response
+BRS-S4QA-035	Field Name: What is the perceived reason for discordance in this case for Organ TPR?
+[Control name: OrganPerceivedReasonCaseDiscordance]
+For internal use only (NOT TO BE EXPORTED): the adjudicator will select one reason for perceived discordance from the list below:
+•	Justifiable medical differences.
+•	Error(s) made by the rejected reader.
+Image quality issues.
+
