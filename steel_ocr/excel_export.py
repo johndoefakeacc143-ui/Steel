@@ -14,7 +14,7 @@ from openpyxl.utils import get_column_letter
 SHEET_COLUMNS = ["Member Name", "Quantity", "Size"]
 
 # Extra detail columns kept after the required three (for tracing completeness)
-BEAM_EXTRA = ["Length", "Material", "Page"]
+BEAM_EXTRA = ["Length", "Length Note", "Material", "Page"]
 COLUMN_EXTRA = ["Height", "Material", "Page"]
 PLATE_EXTRA = ["Thickness", "Anchor Bolt Dia", "Anchor Bolt Qty", "Top of Concrete EL", "Page"]
 

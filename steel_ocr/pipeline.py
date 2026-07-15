@@ -69,12 +69,17 @@ def _members_from_counts(
     sizes = sizes or {}
     rows: list[dict[str, Any]] = []
     for name, qty in sorted(counts.items(), key=lambda x: (len(x[0]), x[0])):
+        raw = sizes.get(name, "")
+        size, note = raw, ""
+        if "|" in raw:
+            size, note = raw.split("|", 1)
         rows.append(
             {
                 "Member Name": name,
                 "Quantity": int(qty),
-                "Size": sizes.get(name, ""),
-                "Length": sizes.get(name, ""),
+                "Size": size,
+                "Length": size,
+                "Length Note": note,
                 "Page": page,
             }
         )

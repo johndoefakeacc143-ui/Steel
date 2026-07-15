@@ -146,3 +146,19 @@ def test_spatial_prefers_overall_span_over_bay_split():
         {"text": "6000", "cx": 500.0, "cy": 150.0},
     ]
     assert associate_dim_to_mark(mark, dims) == "6000"
+
+
+def test_diagonal_brace_length_br1():
+    from steel_ocr.spatial import brace_diagonal_size, diagonal_length_mm, format_mm_length
+
+    assert format_mm_length(diagonal_length_mm(3000, 1500)) == "3354"
+    # Spatial pick from horiz 3000 + vert 1500 near BR1
+    mark = {"text": "BR1", "cx": 400.0, "cy": 200.0}
+    dims = [
+        {"text": "3000", "cx": 400.0, "cy": 140.0},  # horizontal run above
+        {"text": "1500", "cx": 80.0, "cy": 200.0},   # vertical rise to the left
+        {"text": "6000", "cx": 400.0, "cy": 100.0},
+    ]
+    size, note = brace_diagonal_size(mark, dims)
+    assert size == "3354"
+    assert "3000" in note and "1500" in note
