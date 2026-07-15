@@ -104,9 +104,30 @@ pytest -q
 
 ## Tips for better OCR
 
-- Prefer 200–300 DPI scans; set `OCR_DPI=300` in `.env` for dense title blocks
+- Prefer 200–300 DPI scans; set `OCR_DPI=320` in `.env` for dense title blocks
 - Member schedules with clear `B1 / C1 / BP1` marks extract most reliably
 - Edit `steel_ocr/patterns.py` if your office uses non-standard mark prefixes
+
+## Free vision API key (Gemini)
+
+OCR works with **no API key**. For human-like vision assist on each upload:
+
+1. Open [Google AI Studio](https://aistudio.google.com/apikey) and create a **free** API key
+2. Put it in `.env` (already created locally; not committed to git):
+
+```env
+GEMINI_API_KEY=your_key_here
+GEMINI_VISION_MODEL=gemini-2.5-flash
+```
+
+3. Restart: `uvicorn app:app --host 0.0.0.0 --port 8000`
+4. Check http://127.0.0.1:8000/api/health → `"vision_assist": true`
+
+```bash
+./setup_api_key.sh
+```
+
+A real key can only be created in your Google account — it cannot be generated inside this repo.
 
 ## License
 
