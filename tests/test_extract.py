@@ -135,3 +135,14 @@ def test_cli_export_file(tmp_path: Path):
     out = tmp_path / "out.xlsx"
     out.write_bytes(build_excel_bytes(m["beams"], m["columns"], m["base_plates"]))
     assert out.exists() and out.stat().st_size > 1000
+
+
+def test_spatial_prefers_overall_span_over_bay_split():
+    from steel_ocr.spatial import associate_dim_to_mark
+
+    mark = {"text": "B4", "cx": 500.0, "cy": 200.0}
+    dims = [
+        {"text": "3000", "cx": 350.0, "cy": 190.0},
+        {"text": "6000", "cx": 500.0, "cy": 150.0},
+    ]
+    assert associate_dim_to_mark(mark, dims) == "6000"
