@@ -152,6 +152,7 @@ def test_diagonal_brace_length_br1():
     from steel_ocr.spatial import brace_diagonal_size, diagonal_length_mm, format_mm_length
 
     assert format_mm_length(diagonal_length_mm(3000, 1500)) == "3354"
+    assert format_mm_length(diagonal_length_mm(1000, 1500)) == "1803"
     # Spatial pick from horiz 3000 + vert 1500 near BR1
     mark = {"text": "BR1", "cx": 400.0, "cy": 200.0}
     dims = [
@@ -162,3 +163,23 @@ def test_diagonal_brace_length_br1():
     size, note = brace_diagonal_size(mark, dims)
     assert size == "3354"
     assert "3000" in note and "1500" in note
+
+    # Narrow-bay BR1: 1000 × 1500
+    mark2 = {"text": "BR1", "cx": 800.0, "cy": 200.0}
+    dims2 = [
+        {"text": "1000", "cx": 800.0, "cy": 140.0},
+        {"text": "1500", "cx": 80.0, "cy": 200.0},
+        {"text": "1050", "cx": 700.0, "cy": 140.0},
+    ]
+    size2, note2 = brace_diagonal_size(mark2, dims2)
+    assert size2 == "1803"
+    assert "1000" in note2 and "1500" in note2
+
+
+def test_scale_size_counts_preserves_total():
+    from steel_ocr.spatial import scale_size_counts_to_total
+    import collections
+
+    scaled = scale_size_counts_to_total(collections.Counter({"1000": 4, "2000": 26}), 39)
+    assert sum(scaled.values()) == 39
+    assert scaled["1000"] >= 1 and scaled["2000"] >= 1

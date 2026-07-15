@@ -213,11 +213,19 @@ def pick_diagonal_legs(
         val = float(d["text"])
         if val < 900:
             continue
-        # Horizontal run: dim above/below brace (same band)
-        if dy < 150 and dx < 600:
+        # Top/bottom dimension string → horizontal run of the brace bay
+        is_horiz_band = dy < 150 and dy >= 8 and dx < 650
+        # Side story-height dim: beside the mark (same height band, far in x)
+        # or clearly lateral vs the top dimension string.
+        is_side = (dy < 45 and dx >= 120) or (dx > 220 and dx > dy * 1.5)
+        if is_horiz_band and not is_side:
             horiz_cands.append((dy * 2.0 + dx * 0.2, val))
-        # Vertical rise: dim to the left/right — allow farther dx (dim string on grid)
-        if dx < 450 and dy < 200:
+        if is_side and dy < 250 and dx < 900:
+            score = dx * 0.4 + dy * 2.0
+            if val in (1500.0, 2000.0, 2500.0):
+                score *= 0.5
+            vert_cands.append((score, val))
+        elif not is_horiz_band and not is_side and dx < 200 and dy < 350:
             vert_cands.append((dx * 1.5 + dy * 0.5, val))
 
     def best_leg(cands: list[tuple[float, float]], *, prefer_smaller_bay: bool) -> float | None:
@@ -293,56 +301,120 @@ def brace_diagonal_size(
     return format_mm_length(hyp), note
 
 
-def infer_sizes_from_plan_image(
-    image: Image.Image,
-) -> dict[str, str]:
+def instance_size_for_beam(mark: dict[str, Any], dims: list[dict[str, Any]]) -> str:
     """
-    Return {member_name: size} by OCR'ing plan dimensions near marks.
+    Size for one beam mark instance from nearby dims.
 
-    - Straight beams/PB: size = nearby span dimension
-    - Bracing (BR*): size = √(a² + b²) from nearby horizontal + vertical dims
+    Prefers local bay dims (1000 / 2000) when present so marks like B6 can
+    split into multiple size rows (short stubs vs vertical bay pieces).
+    """
+    near: list[tuple[float, str]] = []
+    for d in dims:
+        dist = math.hypot(d["cx"] - mark["cx"], d["cy"] - mark["cy"])
+        if dist < 420:
+            near.append((dist, d["text"]))
+    near.sort()
+    vals = [v for _, v in near[:8]]
+    # Explicit short / bay heights first (common multi-size marks)
+    for preferred in ("1000", "2000", "1500", "3000"):
+        if preferred in vals[:5]:
+            return preferred
+    # OCR near-misses for 1000
+    if any(v in ("1050", "950") for v in vals[:4]):
+        return "1000"
+    # Fall back to band-aligned association (may prefer overall span)
+    aligned = associate_dim_to_mark(mark, dims)
+    if aligned:
+        return aligned
+    return vals[0] if vals else ""
+
+
+def infer_size_quantities_from_plan_image(
+    image: Image.Image,
+) -> dict[str, collections.Counter]:
+    """
+    Per-instance size counts: { 'B6': Counter({'1000': 4, '2000': 26}), ... }.
+
+    Use this when the same mark appears at more than one length on the plan.
     """
     marks, dims = ocr_tokens_with_boxes(image)
-    logger.info("spatial OCR: %s marks, %s dims", len(marks), len(dims))
-    if not dims:
-        return {}
-
-    by_mark: dict[str, list[str]] = collections.defaultdict(list)
-    brace_notes: dict[str, list[str]] = collections.defaultdict(list)
+    by_mark: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
+    brace_notes: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
 
     for m in marks:
         name = m["text"]
         if BRACE_RE.fullmatch(name):
             size, note = brace_diagonal_size(m, dims)
             if size:
-                by_mark[name].append(size)
+                key = f"{size}|{note}" if note else size
+                by_mark[name][key] += 1
                 if note:
-                    brace_notes[name].append(note)
+                    brace_notes[name][note] += 1
             continue
         if BEAM_RE.fullmatch(name) or PB_RE.fullmatch(name):
-            size = associate_dim_to_mark(m, dims)
+            size = instance_size_for_beam(m, dims)
             if size:
-                by_mark[name].append(size)
+                by_mark[name][size] += 1
 
+    return dict(by_mark)
+
+
+def scale_size_counts_to_total(
+    size_counts: collections.Counter,
+    digital_total: int,
+) -> dict[str, int]:
+    """Proportionally scale OCR instance counts to the digital mark total."""
+    if digital_total <= 0:
+        return {}
+    if not size_counts:
+        return {"": digital_total}
+    ocr_total = sum(size_counts.values())
+    items = list(size_counts.items())
+    allocated: dict[str, int] = {}
+    remaining = digital_total
+    for i, (size, n) in enumerate(items):
+        if i == len(items) - 1:
+            allocated[size] = max(0, remaining)
+            remaining = 0
+        else:
+            q = max(1, round(digital_total * n / ocr_total))
+            q = min(q, remaining - (len(items) - i - 1))  # leave ≥1 for each remaining
+            q = max(1, q) if remaining > (len(items) - i - 1) else max(0, remaining)
+            allocated[size] = q
+            remaining -= q
+    return allocated
+
+
+def infer_sizes_from_plan_image(
+    image: Image.Image,
+) -> dict[str, str]:
+    """
+    Return {member_name: size} by OCR'ing plan dimensions near marks.
+
+    - Straight beams/PB: size = nearby span dimension (mode / largest frequent)
+    - Bracing (BR*): size = √(a² + b²) from nearby horizontal + vertical dims
+      stored as "3354|√(3000² + 1500²)" when a formula note is available
+
+    For multi-size marks (B6 @ 1000 and B6 @ 2000), prefer
+    ``infer_size_quantities_from_plan_image`` instead.
+    """
+    qty_map = infer_size_quantities_from_plan_image(image)
     inferred: dict[str, str] = {}
-    for mark, vals in by_mark.items():
-        ctr = collections.Counter(vals)
+    for mark, ctr in qty_map.items():
+        if not ctr:
+            continue
+        if BRACE_RE.fullmatch(mark):
+            # Most common hypotenuse|note
+            inferred[mark] = ctr.most_common(1)[0][0]
+            continue
+        # Single representative size: prefer most common; if tie, keep both via qty API
         ranked = ctr.most_common()
         mode_val, mode_n = ranked[0]
         best = mode_val
-        # Beams: prefer larger frequent span; braces: prefer most common hypotenuse
-        if BEAM_RE.fullmatch(mark) or PB_RE.fullmatch(mark):
-            for val, n in ranked:
-                if n >= max(1, mode_n // 2) and int(float(val)) > int(float(best)):
-                    best = val
+        for val, n in ranked:
+            if n >= max(1, mode_n // 2) and int(float(val)) > int(float(best)):
+                best = val
         inferred[mark] = best
-
-    # Attach formula notes for bracing (stored as "3354|√(3000² + 1500²)")
-    for mark, notes in brace_notes.items():
-        if mark in inferred and notes:
-            note = collections.Counter(notes).most_common(1)[0][0]
-            inferred[mark] = f"{inferred[mark]}|{note}"
-
     return inferred
 
 
