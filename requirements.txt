@@ -1,0 +1,25 @@
+# API
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+python-dotenv==1.0.1
+
+# PDF / OCR / images
+pdfplumber==0.11.4
+pdf2image==1.17.0
+pytesseract==0.3.13
+opencv-python-headless==4.10.0.84
+Pillow==11.1.0
+numpy==1.26.4
+pypdf==5.1.0
+
+# Excel
+pandas==2.2.3
+openpyxl==3.1.5
+
+# Optional vision assist (install if using OPENAI_API_KEY / GEMINI_API_KEY)
+openai==1.59.3
+google-genai==1.14.0
+
+# Tests
+pytest==8.3.4
