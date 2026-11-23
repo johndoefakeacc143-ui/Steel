@@ -278,11 +278,9 @@ def classify(
                 (
                     format_guid(clash.guid1),
                     format_guid(clash.guid2),
-                    " ",
                     attr_for(clash.guid1, parts, bolts),
-                    " ",
                     attr_for(clash.guid2, parts, bolts),
-                    "",
+                    "",  # Remarks
                 )
             )
             continue
@@ -298,9 +296,7 @@ def classify(
                 (
                     format_guid(g1),
                     format_guid(g2),
-                    " ",
                     attr_for(g1, parts, bolts),
-                    " ",
                     attr_for(g2, parts, bolts),
                     "",
                 )
@@ -310,9 +306,7 @@ def classify(
                 (
                     format_guid(g1),
                     format_guid(g2),
-                    " ",
                     attr_for(g1, parts, bolts),
-                    " ",
                     attr_for(g2, parts, bolts),
                     "",
                 )
@@ -322,9 +316,7 @@ def classify(
                 (
                     format_guid(g1),
                     format_guid(g2),
-                    " ",
                     attr_for(g1, parts, bolts),
-                    " ",
                     attr_for(g2, parts, bolts),
                     "",
                 )
@@ -344,27 +336,36 @@ def classify(
     return buckets
 
 
-def style_header(ws, headers: List[str]) -> None:
+CATEGORY_HEADERS = {
+    SHEET_PART_PART: ["GUID1", "GUID2", "PROFILE1", "PROFILE2", "Remarks"],
+    SHEET_PART_BOLT: ["GUID1", "GUID2", "PROFILE1", "bolt1", "Remarks"],
+    SHEET_BOLT_BOLT: ["GUID1", "GUID2", "bolt1", "bolt2", "Remarks"],
+    SHEET_DUP: ["GUID1", "GUID2", "PROFILE1", "PROFILE2", "Remarks"],
+}
+
+
+def style_header_row(ws, row: int, headers: List[str]) -> None:
     bold = Font(bold=True)
     for col, text in enumerate(headers, 1):
-        cell = ws.cell(1, col, text)
+        cell = ws.cell(row, col, text)
         cell.font = bold
-    ws.freeze_panes = "A2"
 
 
-def write_category_sheet(wb: Workbook, name: str, rows: List[Tuple[Any, ...]], with_header: bool) -> None:
+def write_category_sheet(wb: Workbook, name: str, rows: List[Tuple[Any, ...]]) -> None:
     if name in wb.sheetnames:
         del wb[name]
     ws = wb.create_sheet(name)
-    start = 1
-    if with_header:
-        # Match sample final part-to-bolt: GUID1/GUID2 headers only
-        style_header(ws, ["GUID1", "GUID2"])
-        start = 2
-    for r_i, row in enumerate(rows, start):
+    # Row 1: sheet title; Row 2: column headers; Row 3+: data
+    title_cell = ws.cell(1, 1, name)
+    title_cell.font = Font(bold=True, size=14)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=5)
+    headers = CATEGORY_HEADERS.get(name, ["GUID1", "GUID2", "PROFILE1", "PROFILE2", "Remarks"])
+    style_header_row(ws, 2, headers)
+    ws.freeze_panes = "A3"
+    for r_i, row in enumerate(rows, 3):
         for c_i, val in enumerate(row, 1):
             ws.cell(r_i, c_i, val)
-    widths = [42, 42, 3, 18, 3, 18, 40]
+    widths = [42, 42, 22, 22, 40]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -405,19 +406,18 @@ def write_output_workbook(
     ws.column_dimensions["A"].width = 28
     ws.column_dimensions["B"].width = 80
 
-    # Sample style: part-to-bolt style sheets have GUID1/GUID2 header;
-    # part-to-part final in sample has no header — we still add GUID1/GUID2
-    # on all sheets for usability (Notes col left blank for review).
-    write_category_sheet(wb, SHEET_PART_PART, buckets[SHEET_PART_PART], with_header=True)
-    write_category_sheet(wb, SHEET_PART_BOLT, buckets[SHEET_PART_BOLT], with_header=True)
-    write_category_sheet(wb, SHEET_BOLT_BOLT, buckets[SHEET_BOLT_BOLT], with_header=True)
-    write_category_sheet(wb, SHEET_DUP, buckets[SHEET_DUP], with_header=True)
+    write_category_sheet(wb, SHEET_PART_PART, buckets[SHEET_PART_PART])
+    write_category_sheet(wb, SHEET_PART_BOLT, buckets[SHEET_PART_BOLT])
+    write_category_sheet(wb, SHEET_BOLT_BOLT, buckets[SHEET_BOLT_BOLT])
+    write_category_sheet(wb, SHEET_DUP, buckets[SHEET_DUP])
 
     if buckets.get(SHEET_UNRESOLVED):
-        write_category_sheet(wb, SHEET_UNRESOLVED, [], with_header=False)
-        ws_u = wb[SHEET_UNRESOLVED]
-        style_header(ws_u, ["GUID1", "GUID2", "Kind1", "Kind2", "Log line"])
-        for r_i, row in enumerate(buckets[SHEET_UNRESOLVED], 2):
+        if SHEET_UNRESOLVED in wb.sheetnames:
+            del wb[SHEET_UNRESOLVED]
+        ws_u = wb.create_sheet(SHEET_UNRESOLVED)
+        ws_u.cell(1, 1, SHEET_UNRESOLVED).font = Font(bold=True, size=14)
+        style_header_row(ws_u, 2, ["GUID1", "GUID2", "Kind1", "Kind2", "Log line"])
+        for r_i, row in enumerate(buckets[SHEET_UNRESOLVED], 3):
             for c_i, val in enumerate(row, 1):
                 ws_u.cell(r_i, c_i, val)
 

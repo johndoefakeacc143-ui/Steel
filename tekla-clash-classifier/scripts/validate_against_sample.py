@@ -14,6 +14,7 @@ SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from classify_clashes import (  # noqa: E402
+    SHEET_BOLT_BOLT,
     SHEET_PART_BOLT,
     SHEET_PART_PART,
     normalize_guid,
@@ -34,12 +35,20 @@ def load_pairs(path: Path, sheet: str) -> dict:
         if not a or a in {"guid1", "guid"} or "-" not in a:
             continue
         key = frozenset([a, b])
+        # Support old spacer layout (attrs at 3/5) and new layout (attrs at 2/3)
+        if len(row) >= 5 and row[2] not in (None, "", " "):
+            attr1, attr2 = row[2], row[3]
+            remarks = row[4] if len(row) > 4 else None
+        else:
+            attr1 = row[3] if len(row) > 3 else None
+            attr2 = row[5] if len(row) > 5 else None
+            remarks = row[6] if len(row) > 6 else (row[4] if len(row) > 4 else None)
         pairs[key] = {
             "a": a,
             "b": b,
-            "d": row[3] if len(row) > 3 else None,
-            "f": row[5] if len(row) > 5 else None,
-            "g": row[6] if len(row) > 6 else None,
+            "d": attr1,
+            "f": attr2,
+            "g": remarks,
             "a_fmt": row[0],
             "b_fmt": row[1],
         }
@@ -139,19 +148,29 @@ def main() -> int:
     print(f"Raw bolt GUID field repr: {raw_guid_field!r}")
     print(f"Normalized in map: {normalize_guid(raw_guid_field)!r} in bolts={normalize_guid(raw_guid_field) in raw_bolts}")
 
-    # Order check: part first in part-bolt
+    # Order check: part first in part-bolt + header titles
     wb = load_workbook(OUT, read_only=True, data_only=True)
     ws = wb[SHEET_PART_BOLT]
+    headers = [c.value for c in next(ws.iter_rows(min_row=2, max_row=2))]
+    print(f"Part_to_Bolt headers row2: {headers}")
+    assert headers[:5] == ["GUID1", "GUID2", "PROFILE1", "bolt1", "Remarks"], headers
+    title = ws.cell(1, 1).value
+    print(f"Part_to_Bolt title row1: {title}")
+    assert title == SHEET_PART_BOLT, title
+    ws_bb = wb[SHEET_BOLT_BOLT]
+    bb_headers = [c.value for c in next(ws_bb.iter_rows(min_row=2, max_row=2))]
+    print(f"Bolt_to_Bolt headers row2: {bb_headers}")
+    assert bb_headers[:5] == ["GUID1", "GUID2", "bolt1", "bolt2", "Remarks"], bb_headers
+
     part_first = 0
     checked = 0
-    # rebuild quick sets
     from classify_clashes import load_parts as lp, load_bolts as lb
 
     parts = lp(INPUTS / "Universal_Report.xlsx")
     bolts = lb(INPUTS / "BOLT_CHECKING_REPORT.xlsx")
     for i, row in enumerate(ws.iter_rows(values_only=True)):
-        if i == 0:
-            continue
+        if i < 2:
+            continue  # title + header
         a = normalize_guid(row[0])
         b = normalize_guid(row[1])
         if a in parts and b in bolts:

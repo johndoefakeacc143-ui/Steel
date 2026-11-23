@@ -414,12 +414,13 @@ Private Function ClassifyAndWrite(ByVal outWb As Workbook, ByVal clashes As Coll
     counts.Add SHEET_UNRESOLVED, 0
 
     ' Clear default blank sheet(s) after we add ours
-    Set wsPP = AddOutputSheet(outWb, SHEET_PART_PART, True)
-    Set wsPB = AddOutputSheet(outWb, SHEET_PART_BOLT, True)
-    Set wsBB = AddOutputSheet(outWb, SHEET_BOLT_BOLT, True)
-    Set wsDup = AddOutputSheet(outWb, SHEET_DUP, True)
+    Set wsPP = AddOutputSheet(outWb, SHEET_PART_PART, "PROFILE1", "PROFILE2")
+    Set wsPB = AddOutputSheet(outWb, SHEET_PART_BOLT, "PROFILE1", "bolt1")
+    Set wsBB = AddOutputSheet(outWb, SHEET_BOLT_BOLT, "bolt1", "bolt2")
+    Set wsDup = AddOutputSheet(outWb, SHEET_DUP, "PROFILE1", "PROFILE2")
 
-    rPP = 2: rPB = 2: rBB = 2: rDup = 2: rU = 2
+    ' Data starts at row 3 (row 1 = title, row 2 = headers)
+    rPP = 3: rPB = 3: rBB = 3: rDup = 3: rU = 3
     unresolvedCount = 0
     Set wsU = Nothing
 
@@ -457,13 +458,18 @@ Private Function ClassifyAndWrite(ByVal outWb As Workbook, ByVal clashes As Coll
                 counts(SHEET_BOLT_BOLT) = counts(SHEET_BOLT_BOLT) + 1
             Else
                 If wsU Is Nothing Then
-                    Set wsU = AddOutputSheet(outWb, SHEET_UNRESOLVED, False)
-                    wsU.Range("A1").Value = "GUID1"
-                    wsU.Range("B1").Value = "GUID2"
-                    wsU.Range("C1").Value = "Kind1"
-                    wsU.Range("D1").Value = "Kind2"
-                    wsU.Range("E1").Value = "Log line"
-                    wsU.Range("A1:E1").Font.Bold = True
+                    Set wsU = outWb.Worksheets.Add(After:=outWb.Sheets(outWb.Sheets.Count))
+                    wsU.Name = SHEET_UNRESOLVED
+                    wsU.Range("A1").Value = SHEET_UNRESOLVED
+                    wsU.Range("A1").Font.Bold = True
+                    wsU.Range("A1").Font.Size = 14
+                    wsU.Range("A1:E1").Merge
+                    wsU.Range("A2").Value = "GUID1"
+                    wsU.Range("B2").Value = "GUID2"
+                    wsU.Range("C2").Value = "Kind1"
+                    wsU.Range("D2").Value = "Kind2"
+                    wsU.Range("E2").Value = "Log line"
+                    wsU.Range("A2:E2").Font.Bold = True
                 End If
                 wsU.Cells(rU, 1).Value = FormatGuid(g1)
                 wsU.Cells(rU, 2).Value = FormatGuid(g2)
@@ -486,29 +492,33 @@ End Function
 Private Sub WriteRow(ByVal ws As Worksheet, ByVal r As Long, ByVal g1 As String, ByVal g2 As String, ByVal a1 As Variant, ByVal a2 As Variant)
     ws.Cells(r, 1).Value = g1
     ws.Cells(r, 2).Value = g2
-    ws.Cells(r, 3).Value = " "
-    ws.Cells(r, 4).Value = a1
-    ws.Cells(r, 5).Value = " "
-    ws.Cells(r, 6).Value = a2
-    ws.Cells(r, 7).Value = "" ' Notes (manual review)
+    ws.Cells(r, 3).Value = a1
+    ws.Cells(r, 4).Value = a2
+    ws.Cells(r, 5).Value = "" ' Remarks (manual review)
 End Sub
 
-Private Function AddOutputSheet(ByVal outWb As Workbook, ByVal sheetName As String, ByVal withGuidHeader As Boolean) As Worksheet
+Private Function AddOutputSheet(ByVal outWb As Workbook, ByVal sheetName As String, _
+    ByVal col3Header As String, ByVal col4Header As String) As Worksheet
     Dim ws As Worksheet
     Set ws = outWb.Worksheets.Add(After:=outWb.Sheets(outWb.Sheets.Count))
     ws.Name = sheetName
-    If withGuidHeader Then
-        ws.Range("A1").Value = "GUID1"
-        ws.Range("B1").Value = "GUID2"
-        ws.Range("A1:B1").Font.Bold = True
-    End If
+    ' Row 1: title
+    ws.Range("A1").Value = sheetName
+    ws.Range("A1").Font.Bold = True
+    ws.Range("A1").Font.Size = 14
+    ws.Range("A1:E1").Merge
+    ' Row 2: column headers
+    ws.Range("A2").Value = "GUID1"
+    ws.Range("B2").Value = "GUID2"
+    ws.Range("C2").Value = col3Header
+    ws.Range("D2").Value = col4Header
+    ws.Range("E2").Value = "Remarks"
+    ws.Range("A2:E2").Font.Bold = True
     ws.Columns("A").ColumnWidth = 42
     ws.Columns("B").ColumnWidth = 42
-    ws.Columns("C").ColumnWidth = 3
-    ws.Columns("D").ColumnWidth = 18
-    ws.Columns("E").ColumnWidth = 3
-    ws.Columns("F").ColumnWidth = 18
-    ws.Columns("G").ColumnWidth = 40
+    ws.Columns("C").ColumnWidth = 22
+    ws.Columns("D").ColumnWidth = 22
+    ws.Columns("E").ColumnWidth = 40
     Set AddOutputSheet = ws
 End Function
 
@@ -531,7 +541,8 @@ Private Sub WriteSummary(ByVal outWb As Workbook, ByVal u As String, ByVal b As 
     ByVal partCount As Long, ByVal boltCount As Long, ByVal clashCount As Long, ByVal counts As Object)
 
     Dim ws As Worksheet
-    Set ws = AddOutputSheet(outWb, SHEET_SUMMARY, False)
+    Set ws = outWb.Worksheets.Add(After:=outWb.Sheets(outWb.Sheets.Count))
+    ws.Name = SHEET_SUMMARY
     ws.Range("A1").Value = "Tekla Clash Classification Summary"
     ws.Range("A1").Font.Bold = True
     ws.Range("A1").Font.Size = 14
