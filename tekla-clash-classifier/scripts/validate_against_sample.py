@@ -181,8 +181,33 @@ def main() -> int:
     wb.close()
     print(f"Part-first in first 100 Part_to_Bolt rows: {part_first}/{checked}")
 
+    # Sorted by PROFILE1/bolt1 then PROFILE2/bolt2 (whole rows)
+    def is_sorted_by_attrs(sheet_name: str) -> bool:
+        wbo = load_workbook(OUT, read_only=True, data_only=True)
+        vals = []
+        for i, row in enumerate(wbo[sheet_name].iter_rows(values_only=True)):
+            if i < 2:
+                continue
+            if not row[0]:
+                continue
+            vals.append(
+                (
+                    "" if row[2] is None else str(row[2]).strip().upper(),
+                    "" if row[3] is None else str(row[3]).strip().upper(),
+                )
+            )
+        wbo.close()
+        return vals == sorted(vals)
+
+    sort_pp = is_sorted_by_attrs(SHEET_PART_PART)
+    sort_pb = is_sorted_by_attrs(SHEET_PART_BOLT)
+    print(f"Sorted Part_to_Part by PROFILE1/PROFILE2: {sort_pp}")
+    print(f"Sorted Part_to_Bolt by PROFILE1/bolt1: {sort_pb}")
+
     ok = (
-        len(sample_ptb.keys() - our_ptb.keys()) == 0
+        sort_pp
+        and sort_pb
+        and len(sample_ptb.keys() - our_ptb.keys()) == 0
         and len(sample_ptp.keys() - our_ptp.keys()) == 0
         and final_ptb_cover == len(sample_final_ptb)
         and final_ptp_cover == len(sample_final_ptp)

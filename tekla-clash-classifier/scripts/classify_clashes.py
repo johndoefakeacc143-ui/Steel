@@ -351,6 +351,13 @@ def style_header_row(ws, row: int, headers: List[str]) -> None:
         cell.font = bold
 
 
+def _attr_sort_key(row: Tuple[Any, ...]) -> Tuple[str, str]:
+    """Sort whole rows by attr1 then attr2 (PROFILE1/bolt1, PROFILE2/bolt2)."""
+    a1 = "" if len(row) < 3 or row[2] is None else str(row[2]).strip().upper()
+    a2 = "" if len(row) < 4 or row[3] is None else str(row[3]).strip().upper()
+    return (a1, a2)
+
+
 def write_category_sheet(wb: Workbook, name: str, rows: List[Tuple[Any, ...]]) -> None:
     if name in wb.sheetnames:
         del wb[name]
@@ -362,7 +369,9 @@ def write_category_sheet(wb: Workbook, name: str, rows: List[Tuple[Any, ...]]) -
     headers = CATEGORY_HEADERS.get(name, ["GUID1", "GUID2", "PROFILE1", "PROFILE2", "Remarks"])
     style_header_row(ws, 2, headers)
     ws.freeze_panes = "A3"
-    for r_i, row in enumerate(rows, 3):
+    # Sort entire rows by PROFILE1/bolt1 then PROFILE2/bolt2 so GUID pairing stays intact
+    sorted_rows = sorted(rows, key=_attr_sort_key)
+    for r_i, row in enumerate(sorted_rows, 3):
         for c_i, val in enumerate(row, 1):
             ws.cell(r_i, c_i, val)
     widths = [42, 42, 22, 22, 40]

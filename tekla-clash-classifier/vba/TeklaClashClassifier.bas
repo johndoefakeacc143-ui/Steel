@@ -489,11 +489,36 @@ Private Function ClassifyAndWrite(ByVal outWb As Workbook, ByVal clashes As Coll
         End If
     Next i
 
+    ' Sort each category sheet by attr columns (whole rows stay together)
+    SortSheetByAttrColumns wsPP
+    SortSheetByAttrColumns wsPB
+    SortSheetByAttrColumns wsBB
+    SortSheetByAttrColumns wsDup
+
     ' Remove the default Sheet1 if still present and empty-ish
     CleanupDefaultSheets outWb
 
     Set ClassifyAndWrite = counts
 End Function
+
+Private Sub SortSheetByAttrColumns(ByVal ws As Worksheet)
+    ' Sort full data block A3:E(last) by Col C then Col D (PROFILE1/bolt1, PROFILE2/bolt2).
+    ' Entire rows move together so GUID1/GUID2/Remarks stay aligned.
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+    If lastRow < 3 Then Exit Sub
+
+    With ws.Sort
+        .SortFields.Clear
+        .SortFields.Add Key:=ws.Range("C3:C" & lastRow), Order:=xlAscending
+        .SortFields.Add Key:=ws.Range("D3:D" & lastRow), Order:=xlAscending
+        .SetRange ws.Range("A3:E" & lastRow)
+        .Header = xlNo
+        .MatchCase = False
+        .Orientation = xlTopToBottom
+        .Apply
+    End With
+End Sub
 
 Private Sub WriteRow(ByVal ws As Worksheet, ByVal r As Long, ByVal g1 As String, ByVal g2 As String, ByVal a1 As Variant, ByVal a2 As Variant)
     ws.Cells(r, 1).Value = g1
