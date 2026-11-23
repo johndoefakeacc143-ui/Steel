@@ -474,10 +474,11 @@ Private Function ClassifyAndWrite(ByVal outWb As Workbook, ByVal clashes As Coll
 
     maxN = clashes.Count
     If maxN < 1 Then maxN = 1
-    ReDim arrPP(1 To maxN, 1 To 5)
-    ReDim arrPB(1 To maxN, 1 To 5)
-    ReDim arrBB(1 To maxN, 1 To 5)
-    ReDim arrDup(1 To maxN, 1 To 5)
+    ' 9 cols: SL.No. | - | GUID1 | GUID2 | - | ATTR1 | - | ATTR2 | Remarks
+    ReDim arrPP(1 To maxN, 1 To 9)
+    ReDim arrPB(1 To maxN, 1 To 9)
+    ReDim arrBB(1 To maxN, 1 To 9)
+    ReDim arrDup(1 To maxN, 1 To 9)
     ReDim arrU(1 To maxN, 1 To 5)
     nPP = 0: nPB = 0: nBB = 0: nDup = 0: nU = 0
     Set wsU = Nothing
@@ -492,11 +493,7 @@ Private Function ClassifyAndWrite(ByVal outWb As Workbook, ByVal clashes As Coll
 
         If isInside Then
             nDup = nDup + 1
-            arrDup(nDup, 1) = FormatGuid(g1)
-            arrDup(nDup, 2) = FormatGuid(g2)
-            arrDup(nDup, 3) = AttrFor(g1, parts, bolts)
-            arrDup(nDup, 4) = AttrFor(g2, parts, bolts)
-            arrDup(nDup, 5) = ""
+            FillClashRow arrDup, nDup, g1, g2, parts, bolts
         Else
             If k1 = "bolt" And k2 = "part" Then
                 tg = g1: g1 = g2: g2 = tg
@@ -505,25 +502,13 @@ Private Function ClassifyAndWrite(ByVal outWb As Workbook, ByVal clashes As Coll
 
             If k1 = "part" And k2 = "part" Then
                 nPP = nPP + 1
-                arrPP(nPP, 1) = FormatGuid(g1)
-                arrPP(nPP, 2) = FormatGuid(g2)
-                arrPP(nPP, 3) = AttrFor(g1, parts, bolts)
-                arrPP(nPP, 4) = AttrFor(g2, parts, bolts)
-                arrPP(nPP, 5) = ""
+                FillClashRow arrPP, nPP, g1, g2, parts, bolts
             ElseIf k1 = "part" And k2 = "bolt" Then
                 nPB = nPB + 1
-                arrPB(nPB, 1) = FormatGuid(g1)
-                arrPB(nPB, 2) = FormatGuid(g2)
-                arrPB(nPB, 3) = AttrFor(g1, parts, bolts)
-                arrPB(nPB, 4) = AttrFor(g2, parts, bolts)
-                arrPB(nPB, 5) = ""
+                FillClashRow arrPB, nPB, g1, g2, parts, bolts
             ElseIf k1 = "bolt" And k2 = "bolt" Then
                 nBB = nBB + 1
-                arrBB(nBB, 1) = FormatGuid(g1)
-                arrBB(nBB, 2) = FormatGuid(g2)
-                arrBB(nBB, 3) = AttrFor(g1, parts, bolts)
-                arrBB(nBB, 4) = AttrFor(g2, parts, bolts)
-                arrBB(nBB, 5) = ""
+                FillClashRow arrBB, nBB, g1, g2, parts, bolts
             Else
                 If wsU Is Nothing Then
                     Set wsU = outWb.Worksheets.Add(After:=outWb.Sheets(outWb.Sheets.Count))
@@ -550,11 +535,11 @@ Private Function ClassifyAndWrite(ByVal outWb As Workbook, ByVal clashes As Coll
     Next i
 
     ' One Range dump per sheet (much faster than writing each cell)
-    DumpRows wsPP, arrPP, nPP
-    DumpRows wsPB, arrPB, nPB
-    DumpRows wsBB, arrBB, nBB
-    DumpRows wsDup, arrDup, nDup
-    If nU > 0 And Not wsU Is Nothing Then DumpRows wsU, arrU, nU
+    DumpRows wsPP, arrPP, nPP, 9
+    DumpRows wsPB, arrPB, nPB, 9
+    DumpRows wsBB, arrBB, nBB, 9
+    DumpRows wsDup, arrDup, nDup, 9
+    If nU > 0 And Not wsU Is Nothing Then DumpRows wsU, arrU, nU, 5
 
     counts(SHEET_PART_PART) = nPP
     counts(SHEET_PART_BOLT) = nPB
@@ -567,36 +552,55 @@ Private Function ClassifyAndWrite(ByVal outWb As Workbook, ByVal clashes As Coll
     SortSheetByAttrColumns wsBB
     SortSheetByAttrColumns wsDup
 
+    RenumberSerialColumn wsPP
+    RenumberSerialColumn wsPB
+    RenumberSerialColumn wsBB
+    RenumberSerialColumn wsDup
+
     CleanupDefaultSheets outWb
 
     Set ClassifyAndWrite = counts
 End Function
 
-Private Sub DumpRows(ByVal ws As Worksheet, ByRef src As Variant, ByVal n As Long)
+Private Sub FillClashRow(ByRef arr As Variant, ByVal r As Long, ByVal g1 As String, ByVal g2 As String, _
+    ByVal parts As Object, ByVal bolts As Object)
+    ' SL.No. | - | GUID1 | GUID2 | - | ATTR1 | - | ATTR2 | Remarks
+    arr(r, 1) = r ' temporary; renumbered after sort
+    arr(r, 2) = " "
+    arr(r, 3) = FormatGuid(g1)
+    arr(r, 4) = FormatGuid(g2)
+    arr(r, 5) = " "
+    arr(r, 6) = AttrFor(g1, parts, bolts)
+    arr(r, 7) = " "
+    arr(r, 8) = AttrFor(g2, parts, bolts)
+    arr(r, 9) = ""
+End Sub
+
+Private Sub DumpRows(ByVal ws As Worksheet, ByRef src As Variant, ByVal n As Long, ByVal ncols As Long)
     Dim out() As Variant
     Dim i As Long, j As Long
     If n < 1 Then Exit Sub
-    ReDim out(1 To n, 1 To 5)
+    ReDim out(1 To n, 1 To ncols)
     For i = 1 To n
-        For j = 1 To 5
+        For j = 1 To ncols
             out(i, j) = src(i, j)
         Next j
     Next i
-    ws.Range("A3").Resize(n, 5).Value = out
+    ws.Range("A3").Resize(n, ncols).Value = out
 End Sub
 
 Private Sub SortSheetByAttrColumns(ByVal ws As Worksheet)
-    ' Sort full data block A3:E(last) by Col C then Col D (PROFILE1/bolt1, PROFILE2/bolt2).
+    ' Sort A3:I(last) by Col F then Col H (PROFILE1/bolt1, PROFILE2/bolt2).
     ' Entire rows move together so GUID1/GUID2/Remarks stay aligned.
     Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+    lastRow = ws.Cells(ws.Rows.Count, "C").End(xlUp).Row
     If lastRow < 3 Then Exit Sub
 
     With ws.Sort
         .SortFields.Clear
-        .SortFields.Add Key:=ws.Range("C3:C" & lastRow), Order:=xlAscending
-        .SortFields.Add Key:=ws.Range("D3:D" & lastRow), Order:=xlAscending
-        .SetRange ws.Range("A3:E" & lastRow)
+        .SortFields.Add Key:=ws.Range("F3:F" & lastRow), Order:=xlAscending
+        .SortFields.Add Key:=ws.Range("H3:H" & lastRow), Order:=xlAscending
+        .SetRange ws.Range("A3:I" & lastRow)
         .Header = xlNo
         .MatchCase = False
         .Orientation = xlTopToBottom
@@ -604,8 +608,17 @@ Private Sub SortSheetByAttrColumns(ByVal ws As Worksheet)
     End With
 End Sub
 
+Private Sub RenumberSerialColumn(ByVal ws As Worksheet)
+    Dim lastRow As Long, r As Long
+    lastRow = ws.Cells(ws.Rows.Count, "C").End(xlUp).Row
+    If lastRow < 3 Then Exit Sub
+    For r = 3 To lastRow
+        ws.Cells(r, 1).Value = r - 2
+    Next r
+End Sub
+
 Private Function AddOutputSheet(ByVal outWb As Workbook, ByVal sheetName As String, _
-    ByVal col3Header As String, ByVal col4Header As String) As Worksheet
+    ByVal attr1Header As String, ByVal attr2Header As String) As Worksheet
     Dim ws As Worksheet
     Set ws = outWb.Worksheets.Add(After:=outWb.Sheets(outWb.Sheets.Count))
     ws.Name = sheetName
@@ -613,19 +626,27 @@ Private Function AddOutputSheet(ByVal outWb As Workbook, ByVal sheetName As Stri
     ws.Range("A1").Value = sheetName
     ws.Range("A1").Font.Bold = True
     ws.Range("A1").Font.Size = 14
-    ws.Range("A1:E1").Merge
-    ' Row 2: column headers
-    ws.Range("A2").Value = "GUID1"
-    ws.Range("B2").Value = "GUID2"
-    ws.Range("C2").Value = col3Header
-    ws.Range("D2").Value = col4Header
-    ws.Range("E2").Value = "Remarks"
-    ws.Range("A2:E2").Font.Bold = True
-    ws.Columns("A").ColumnWidth = 42
-    ws.Columns("B").ColumnWidth = 42
-    ws.Columns("C").ColumnWidth = 22
-    ws.Columns("D").ColumnWidth = 22
-    ws.Columns("E").ColumnWidth = 40
+    ws.Range("A1:I1").Merge
+    ' Row 2: SL.No. | - | GUID1 | GUID2 | - | ATTR1 | - | ATTR2 | Remarks
+    ws.Range("A2").Value = "SL.No."
+    ws.Range("B2").Value = "-"
+    ws.Range("C2").Value = "GUID1"
+    ws.Range("D2").Value = "GUID2"
+    ws.Range("E2").Value = "-"
+    ws.Range("F2").Value = attr1Header
+    ws.Range("G2").Value = "-"
+    ws.Range("H2").Value = attr2Header
+    ws.Range("I2").Value = "Remarks"
+    ws.Range("A2:I2").Font.Bold = True
+    ws.Columns("A").ColumnWidth = 8
+    ws.Columns("B").ColumnWidth = 3
+    ws.Columns("C").ColumnWidth = 42
+    ws.Columns("D").ColumnWidth = 42
+    ws.Columns("E").ColumnWidth = 3
+    ws.Columns("F").ColumnWidth = 22
+    ws.Columns("G").ColumnWidth = 3
+    ws.Columns("H").ColumnWidth = 22
+    ws.Columns("I").ColumnWidth = 40
     Set AddOutputSheet = ws
 End Function
 

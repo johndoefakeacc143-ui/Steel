@@ -25,18 +25,47 @@ INPUTS = Path("/cursor/stores/self/internal/tekla-inputs")
 OUT = Path("/tmp/tekla_clash_validation_out.xlsx")
 
 
+def _find_guid_cols(row) -> tuple:
+    """Return (guid1_idx, guid2_idx) for a data row, or (-1, -1)."""
+    found = []
+    for i, v in enumerate(row):
+        g = normalize_guid(v)
+        if g and "-" in g and g not in {"guid1", "guid2", "guid"}:
+            # Prefer cells that look like UUID text
+            s = str(v or "")
+            if "guid" in s.lower() or len(g) >= 32:
+                found.append(i)
+        if len(found) >= 2:
+            break
+    if len(found) >= 2:
+        return found[0], found[1]
+    return -1, -1
+
+
 def load_pairs(path: Path, sheet: str) -> dict:
     wb = load_workbook(path, read_only=True, data_only=True)
     ws = wb[sheet]
     pairs = {}
     for row in ws.iter_rows(values_only=True):
-        a = normalize_guid(row[0])
-        b = normalize_guid(row[1])
-        if not a or a in {"guid1", "guid"} or "-" not in a:
-            continue
+        gi, gj = _find_guid_cols(row)
+        if gi < 0:
+            # legacy: GUID in col A/B
+            a = normalize_guid(row[0] if row else None)
+            b = normalize_guid(row[1] if row and len(row) > 1 else None)
+            if not a or a in {"guid1", "guid"} or "-" not in a:
+                continue
+            gi, gj = 0, 1
+        else:
+            a = normalize_guid(row[gi])
+            b = normalize_guid(row[gj])
+            if not a or "-" not in a:
+                continue
         key = frozenset([a, b])
-        # Support old spacer layout (attrs at 3/5) and new layout (attrs at 2/3)
-        if len(row) >= 5 and row[2] not in (None, "", " "):
+        # New layout: attrs at F/H (5/7); mid layout attrs at 2/3; old spacer at 3/5
+        if len(row) >= 9 and row[5] not in (None, "", " ") and str(row[5]).strip() not in {"PROFILE1", "bolt1"}:
+            attr1, attr2 = row[5], row[7]
+            remarks = row[8] if len(row) > 8 else None
+        elif len(row) >= 5 and row[2] not in (None, "", " ") and "GUID" not in str(row[2]).upper():
             attr1, attr2 = row[2], row[3]
             remarks = row[4] if len(row) > 4 else None
         else:
@@ -49,8 +78,8 @@ def load_pairs(path: Path, sheet: str) -> dict:
             "d": attr1,
             "f": attr2,
             "g": remarks,
-            "a_fmt": row[0],
-            "b_fmt": row[1],
+            "a_fmt": row[gi],
+            "b_fmt": row[gj],
         }
     wb.close()
     return pairs
@@ -153,14 +182,16 @@ def main() -> int:
     ws = wb[SHEET_PART_BOLT]
     headers = [c.value for c in next(ws.iter_rows(min_row=2, max_row=2))]
     print(f"Part_to_Bolt headers row2: {headers}")
-    assert headers[:5] == ["GUID1", "GUID2", "PROFILE1", "bolt1", "Remarks"], headers
+    expect_pb = ["SL.No.", "-", "GUID1", "GUID2", "-", "PROFILE1", "-", "bolt1", "Remarks"]
+    assert headers[:9] == expect_pb, headers
     title = ws.cell(1, 1).value
     print(f"Part_to_Bolt title row1: {title}")
     assert title == SHEET_PART_BOLT, title
     ws_bb = wb[SHEET_BOLT_BOLT]
     bb_headers = [c.value for c in next(ws_bb.iter_rows(min_row=2, max_row=2))]
     print(f"Bolt_to_Bolt headers row2: {bb_headers}")
-    assert bb_headers[:5] == ["GUID1", "GUID2", "bolt1", "bolt2", "Remarks"], bb_headers
+    expect_bb = ["SL.No.", "-", "GUID1", "GUID2", "-", "bolt1", "-", "bolt2", "Remarks"]
+    assert bb_headers[:9] == expect_bb, bb_headers
 
     part_first = 0
     checked = 0
@@ -171,8 +202,8 @@ def main() -> int:
     for i, row in enumerate(ws.iter_rows(values_only=True)):
         if i < 2:
             continue  # title + header
-        a = normalize_guid(row[0])
-        b = normalize_guid(row[1])
+        a = normalize_guid(row[2])
+        b = normalize_guid(row[3])
         if a in parts and b in bolts:
             part_first += 1
         checked += 1
@@ -181,19 +212,19 @@ def main() -> int:
     wb.close()
     print(f"Part-first in first 100 Part_to_Bolt rows: {part_first}/{checked}")
 
-    # Sorted by PROFILE1/bolt1 then PROFILE2/bolt2 (whole rows)
+    # Sorted by PROFILE1/bolt1 then PROFILE2/bolt2 (whole rows) — cols F/H
     def is_sorted_by_attrs(sheet_name: str) -> bool:
         wbo = load_workbook(OUT, read_only=True, data_only=True)
         vals = []
         for i, row in enumerate(wbo[sheet_name].iter_rows(values_only=True)):
             if i < 2:
                 continue
-            if not row[0]:
+            if row[2] is None:
                 continue
             vals.append(
                 (
-                    "" if row[2] is None else str(row[2]).strip().upper(),
-                    "" if row[3] is None else str(row[3]).strip().upper(),
+                    "" if row[5] is None else str(row[5]).strip().upper(),
+                    "" if row[7] is None else str(row[7]).strip().upper(),
                 )
             )
         wbo.close()

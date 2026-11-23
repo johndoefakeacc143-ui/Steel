@@ -272,17 +272,25 @@ def classify(
         k1 = kind_of(clash.guid1, parts, bolts)
         k2 = kind_of(clash.guid2, parts, bolts)
 
+        def make_row(g_a: str, g_b: str) -> Tuple[Any, ...]:
+            # Layout matches Tekla-friendly export:
+            # SL.No. | - | GUID1 | GUID2 | - | ATTR1 | - | ATTR2 | Remarks
+            # (serial filled later; spacer cells are a single space)
+            return (
+                0,  # SL.No. placeholder
+                " ",
+                format_guid(g_a),
+                format_guid(g_b),
+                " ",
+                attr_for(g_a, parts, bolts),
+                " ",
+                attr_for(g_b, parts, bolts),
+                "",  # Remarks
+            )
+
         # Duplicate / overlapping takes priority
         if clash.is_inside_member:
-            buckets[SHEET_DUP].append(
-                (
-                    format_guid(clash.guid1),
-                    format_guid(clash.guid2),
-                    attr_for(clash.guid1, parts, bolts),
-                    attr_for(clash.guid2, parts, bolts),
-                    "",  # Remarks
-                )
-            )
+            buckets[SHEET_DUP].append(make_row(clash.guid1, clash.guid2))
             continue
 
         # Normalize part-bolt order: part first (matches sample PART TO BOLT)
@@ -292,35 +300,11 @@ def classify(
             kk1, kk2 = kk2, kk1
 
         if kk1 == "part" and kk2 == "part":
-            buckets[SHEET_PART_PART].append(
-                (
-                    format_guid(g1),
-                    format_guid(g2),
-                    attr_for(g1, parts, bolts),
-                    attr_for(g2, parts, bolts),
-                    "",
-                )
-            )
+            buckets[SHEET_PART_PART].append(make_row(g1, g2))
         elif kk1 == "part" and kk2 == "bolt":
-            buckets[SHEET_PART_BOLT].append(
-                (
-                    format_guid(g1),
-                    format_guid(g2),
-                    attr_for(g1, parts, bolts),
-                    attr_for(g2, parts, bolts),
-                    "",
-                )
-            )
+            buckets[SHEET_PART_BOLT].append(make_row(g1, g2))
         elif kk1 == "bolt" and kk2 == "bolt":
-            buckets[SHEET_BOLT_BOLT].append(
-                (
-                    format_guid(g1),
-                    format_guid(g2),
-                    attr_for(g1, parts, bolts),
-                    attr_for(g2, parts, bolts),
-                    "",
-                )
-            )
+            buckets[SHEET_BOLT_BOLT].append(make_row(g1, g2))
         else:
             unresolved.append(
                 (
@@ -337,10 +321,11 @@ def classify(
 
 
 CATEGORY_HEADERS = {
-    SHEET_PART_PART: ["GUID1", "GUID2", "PROFILE1", "PROFILE2", "Remarks"],
-    SHEET_PART_BOLT: ["GUID1", "GUID2", "PROFILE1", "bolt1", "Remarks"],
-    SHEET_BOLT_BOLT: ["GUID1", "GUID2", "bolt1", "bolt2", "Remarks"],
-    SHEET_DUP: ["GUID1", "GUID2", "PROFILE1", "PROFILE2", "Remarks"],
+    # SL.No. | - | GUID1 | GUID2 | - | ATTR1 | - | ATTR2 | Remarks
+    SHEET_PART_PART: ["SL.No.", "-", "GUID1", "GUID2", "-", "PROFILE1", "-", "PROFILE2", "Remarks"],
+    SHEET_PART_BOLT: ["SL.No.", "-", "GUID1", "GUID2", "-", "PROFILE1", "-", "bolt1", "Remarks"],
+    SHEET_BOLT_BOLT: ["SL.No.", "-", "GUID1", "GUID2", "-", "bolt1", "-", "bolt2", "Remarks"],
+    SHEET_DUP: ["SL.No.", "-", "GUID1", "GUID2", "-", "PROFILE1", "-", "PROFILE2", "Remarks"],
 }
 
 
@@ -352,9 +337,9 @@ def style_header_row(ws, row: int, headers: List[str]) -> None:
 
 
 def _attr_sort_key(row: Tuple[Any, ...]) -> Tuple[str, str]:
-    """Sort whole rows by attr1 then attr2 (PROFILE1/bolt1, PROFILE2/bolt2)."""
-    a1 = "" if len(row) < 3 or row[2] is None else str(row[2]).strip().upper()
-    a2 = "" if len(row) < 4 or row[3] is None else str(row[3]).strip().upper()
+    """Sort whole rows by ATTR1 then ATTR2 (cols F/H = indexes 5/7)."""
+    a1 = "" if len(row) < 6 or row[5] is None else str(row[5]).strip().upper()
+    a2 = "" if len(row) < 8 or row[7] is None else str(row[7]).strip().upper()
     return (a1, a2)
 
 
@@ -365,16 +350,21 @@ def write_category_sheet(wb: Workbook, name: str, rows: List[Tuple[Any, ...]]) -
     # Row 1: sheet title; Row 2: column headers; Row 3+: data
     title_cell = ws.cell(1, 1, name)
     title_cell.font = Font(bold=True, size=14)
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=5)
-    headers = CATEGORY_HEADERS.get(name, ["GUID1", "GUID2", "PROFILE1", "PROFILE2", "Remarks"])
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=9)
+    headers = CATEGORY_HEADERS.get(
+        name, ["SL.No.", "-", "GUID1", "GUID2", "-", "PROFILE1", "-", "PROFILE2", "Remarks"]
+    )
     style_header_row(ws, 2, headers)
     ws.freeze_panes = "A3"
     # Sort entire rows by PROFILE1/bolt1 then PROFILE2/bolt2 so GUID pairing stays intact
     sorted_rows = sorted(rows, key=_attr_sort_key)
     for r_i, row in enumerate(sorted_rows, 3):
-        for c_i, val in enumerate(row, 1):
+        # Fill serial number after sort so numbering matches display order
+        out = list(row)
+        out[0] = r_i - 2
+        for c_i, val in enumerate(out, 1):
             ws.cell(r_i, c_i, val)
-    widths = [42, 42, 22, 22, 40]
+    widths = [8, 3, 42, 42, 3, 22, 3, 22, 40]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
