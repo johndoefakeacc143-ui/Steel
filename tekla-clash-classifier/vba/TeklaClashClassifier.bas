@@ -15,6 +15,10 @@ Private Const SHEET_SUMMARY As String = "Summary"
 Private Const SHEET_UNRESOLVED As String = "Unresolved"
 Private Const RUN_BUTTON_NAME As String = "btnRunClashClassification"
 
+' Cached regex objects (creating RegExp per cell was a major slowdown)
+Private mGuidRe As Object
+Private mClashRe As Object
+
 ' Runs when the macro-enabled workbook opens (after VBA is imported).
 Public Sub Auto_Open()
     On Error Resume Next
@@ -79,15 +83,19 @@ Public Sub RunClashClassification()
 
     Application.ScreenUpdating = False
     Application.Calculation = xlCalculationManual
-    Application.StatusBar = "Loading Universal Report..."
+    Application.EnableEvents = False
+    On Error Resume Next
+    Application.PrintCommunication = False
+    On Error GoTo Fail
 
+    Application.StatusBar = "Loading Universal Report..."
     Set parts = LoadParts(CStr(universalPath))
     Application.StatusBar = "Loading Bolt report..."
     Set bolts = LoadBolts(CStr(boltPath))
     Application.StatusBar = "Parsing ClashCheck.log..."
     Set clashes = ParseClashLog(CStr(clashPath))
 
-    Application.StatusBar = "Classifying clashes..."
+    Application.StatusBar = "Classifying clashes (bulk write)..."
     Set outWb = Workbooks.Add(xlWBATWorksheet)
     Set counts = ClassifyAndWrite(outWb, clashes, parts, bolts)
     WriteSummary outWb, CStr(universalPath), CStr(boltPath), CStr(clashPath), _
@@ -98,9 +106,13 @@ Public Sub RunClashClassification()
     outWb.Sheets(SHEET_SUMMARY).Move Before:=outWb.Sheets(1)
     On Error GoTo Fail
 
-    Application.ScreenUpdating = True
-    Application.Calculation = xlCalculationAutomatic
     Application.StatusBar = False
+    Application.EnableEvents = True
+    On Error Resume Next
+    Application.PrintCommunication = True
+    On Error GoTo Fail
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
 
     outPath = Application.GetSaveAsFilename( _
         InitialFileName:="Tekla_Clash_Classification.xlsx", _
@@ -116,8 +128,10 @@ Public Sub RunClashClassification()
     End If
 
     Application.DisplayAlerts = False
+    Application.ScreenUpdating = False
     outWb.SaveAs Filename:=CStr(outPath), FileFormat:=xlOpenXMLWorkbook
     Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
 
     statusLine = CountSummary(counts)
     UpdateControlStatus "OK " & Format$(Now, "yyyy-mm-dd hh:nn:ss"), statusLine & " | Saved: " & CStr(outPath)
@@ -129,8 +143,12 @@ Public Sub RunClashClassification()
 Fail:
     Application.Calculation = xlCalculationAutomatic
     Application.ScreenUpdating = True
+    Application.EnableEvents = True
     Application.StatusBar = False
     Application.DisplayAlerts = True
+    On Error Resume Next
+    Application.PrintCommunication = True
+    On Error GoTo 0
     UpdateControlStatus "ERROR", Err.Description
     MsgBox "Error: " & Err.Description, vbCritical, "Tekla Clash Classifier"
 End Sub
@@ -234,19 +252,39 @@ Private Sub DeleteAllButtons(ByVal ws As Worksheet)
     On Error GoTo 0
 End Sub
 
+Private Function GuidRegex() As Object
+    If mGuidRe Is Nothing Then
+        Set mGuidRe = CreateObject("VBScript.RegExp")
+        mGuidRe.Global = False
+        mGuidRe.IgnoreCase = True
+        mGuidRe.Pattern = "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+    End If
+    Set GuidRegex = mGuidRe
+End Function
+
+Private Function ClashRegex() As Object
+    If mClashRe Is Nothing Then
+        Set mClashRe = CreateObject("VBScript.RegExp")
+        mClashRe.Global = False
+        mClashRe.IgnoreCase = True
+        mClashRe.Pattern = "Guid:\s*([0-9a-fA-F-]{36})\s*<->\s*Guid:\s*([0-9a-fA-F-]{36})"
+    End If
+    Set ClashRegex = mClashRe
+End Function
+
 Private Function NormalizeGuid(ByVal value As Variant) As String
     Dim s As String
-    Dim re As Object
     Dim m As Object
     s = Trim$(CStr(value & ""))
     If UCase$(Left$(s, 5)) = "GUID:" Then s = Trim$(Mid$(s, 6))
     s = Trim$(s)
-    Set re = CreateObject("VBScript.RegExp")
-    re.Global = False
-    re.IgnoreCase = True
-    re.Pattern = "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
-    If re.Test(s) Then
-        Set m = re.Execute(s)
+    ' Fast path: already a bare GUID
+    If Len(s) = 36 And Mid$(s, 9, 1) = "-" Then
+        NormalizeGuid = LCase$(s)
+        Exit Function
+    End If
+    If GuidRegex().Test(s) Then
+        Set m = GuidRegex().Execute(s)
         NormalizeGuid = LCase$(m(0).SubMatches(0))
     Else
         NormalizeGuid = LCase$(s)
@@ -267,32 +305,39 @@ Private Function LoadParts(ByVal path As String) As Object
     Dim ws As Worksheet
     Dim headerRow As Long, guidCol As Long
     Dim profileCol As Long, nameCol As Long
-    Dim lastRow As Long, r As Long
+    Dim lastRow As Long, lastCol As Long, r As Long
     Dim guid As String
+    Dim data As Variant
+    Dim profile As String, nm As String
 
     Set dict = CreateObject("Scripting.Dictionary")
     dict.CompareMode = 1 ' TextCompare
 
-    Set wb = Workbooks.Open(Filename:=path, ReadOnly:=True)
+    Set wb = Workbooks.Open(Filename:=path, ReadOnly:=True, UpdateLinks:=0)
     Set ws = PickBestSheet(wb, "universal,report,part")
     FindHeaderRowAndGuidCol ws, headerRow, guidCol
     profileCol = FindColByNames(ws, headerRow, Array("Profile"))
     nameCol = FindColByNames(ws, headerRow, Array("Name"))
     lastRow = ws.Cells(ws.Rows.Count, guidCol).End(xlUp).Row
+    lastCol = ws.Cells(headerRow, ws.Columns.Count).End(xlToLeft).Column
+    If lastCol < guidCol Then lastCol = guidCol
+    If profileCol > lastCol Then lastCol = profileCol
+    If nameCol > lastCol Then lastCol = nameCol
 
-    For r = headerRow + 1 To lastRow
-        guid = NormalizeGuid(ws.Cells(r, guidCol).Value)
-        If InStr(guid, "-") > 0 Then
-            Dim profile As String, nm As String
-            profile = ""
-            nm = ""
-            If profileCol > 0 Then profile = Trim$(CStr(ws.Cells(r, profileCol).Value & ""))
-            If nameCol > 0 Then nm = Trim$(CStr(ws.Cells(r, nameCol).Value & ""))
-            If Not dict.Exists(guid) Then
-                dict.Add guid, Array(profile, nm)
+    ' One bulk read instead of per-cell COM calls
+    data = ws.Range(ws.Cells(headerRow + 1, 1), ws.Cells(lastRow, lastCol)).Value
+    If IsArray(data) Then
+        For r = 1 To UBound(data, 1)
+            guid = NormalizeGuid(data(r, guidCol))
+            If InStr(guid, "-") > 0 Then
+                profile = ""
+                nm = ""
+                If profileCol > 0 Then profile = Trim$(CStr(data(r, profileCol) & ""))
+                If nameCol > 0 Then nm = Trim$(CStr(data(r, nameCol) & ""))
+                If Not dict.Exists(guid) Then dict.Add guid, Array(profile, nm)
             End If
-        End If
-    Next r
+        Next r
+    End If
 
     wb.Close SaveChanges:=False
     Set LoadParts = dict
@@ -304,40 +349,45 @@ Private Function LoadBolts(ByVal path As String) As Object
     Dim ws As Worksheet
     Dim headerRow As Long, guidCol As Long
     Dim diaCol As Long, stdCol As Long
-    Dim lastRow As Long, r As Long
+    Dim lastRow As Long, lastCol As Long, r As Long
     Dim guid As String
     Dim diaVal As Variant
+    Dim data As Variant
+    Dim std As String
 
     Set dict = CreateObject("Scripting.Dictionary")
     dict.CompareMode = 1
 
-    Set wb = Workbooks.Open(Filename:=path, ReadOnly:=True, Local:=True)
+    Set wb = Workbooks.Open(Filename:=path, ReadOnly:=True, Local:=True, UpdateLinks:=0)
     Set ws = PickBestSheet(wb, "bolt,report")
     FindHeaderRowAndGuidCol ws, headerRow, guidCol
     diaCol = FindColByNames(ws, headerRow, Array("BOLT_DIA", "Bolt_Dia", "Diameter", "DIA"))
     stdCol = FindColByNames(ws, headerRow, Array("BOLT_STD", "Bolt_Std", "Standard"))
     lastRow = ws.Cells(ws.Rows.Count, guidCol).End(xlUp).Row
+    lastCol = ws.Cells(headerRow, ws.Columns.Count).End(xlToLeft).Column
+    If lastCol < guidCol Then lastCol = guidCol
+    If diaCol > lastCol Then lastCol = diaCol
+    If stdCol > lastCol Then lastCol = stdCol
 
-    For r = headerRow + 1 To lastRow
-        ' Trim spaces on bolt GUIDs
-        guid = NormalizeGuid(ws.Cells(r, guidCol).Value)
-        If InStr(guid, "-") > 0 Then
-            diaVal = ""
-            If diaCol > 0 Then
-                diaVal = ws.Cells(r, diaCol).Value
-                If VarType(diaVal) = vbString Then
-                    diaVal = Trim$(CStr(diaVal))
-                    If IsNumeric(diaVal) Then diaVal = CLng(diaVal)
+    data = ws.Range(ws.Cells(headerRow + 1, 1), ws.Cells(lastRow, lastCol)).Value
+    If IsArray(data) Then
+        For r = 1 To UBound(data, 1)
+            guid = NormalizeGuid(data(r, guidCol))
+            If InStr(guid, "-") > 0 Then
+                diaVal = ""
+                If diaCol > 0 Then
+                    diaVal = data(r, diaCol)
+                    If VarType(diaVal) = vbString Then
+                        diaVal = Trim$(CStr(diaVal))
+                        If IsNumeric(diaVal) Then diaVal = CLng(diaVal)
+                    End If
                 End If
+                std = ""
+                If stdCol > 0 Then std = Trim$(CStr(data(r, stdCol) & ""))
+                If Not dict.Exists(guid) Then dict.Add guid, Array(diaVal, std)
             End If
-            Dim std As String
-            std = ""
-            If stdCol > 0 Then std = Trim$(CStr(ws.Cells(r, stdCol).Value & ""))
-            If Not dict.Exists(guid) Then
-                dict.Add guid, Array(diaVal, std)
-            End If
-        End If
-    Next r
+        Next r
+    End If
 
     wb.Close SaveChanges:=False
     Set LoadBolts = dict
@@ -353,10 +403,7 @@ Private Function ParseClashLog(ByVal path As String) As Collection
     Dim isInside As Boolean
 
     Set col = New Collection
-    Set re = CreateObject("VBScript.RegExp")
-    re.Global = False
-    re.IgnoreCase = True
-    re.Pattern = "Guid:\s*([0-9a-fA-F-]{36})\s*<->\s*Guid:\s*([0-9a-fA-F-]{36})"
+    Set re = ClashRegex()
 
     fnum = FreeFile
     Open path For Input As #fnum
@@ -403,14 +450,15 @@ Private Function ClassifyAndWrite(ByVal outWb As Workbook, ByVal clashes As Coll
     ByVal parts As Object, ByVal bolts As Object) As Object
 
     Dim counts As Object
-    Dim i As Long
+    Dim i As Long, maxN As Long
     Dim item As Variant
     Dim g1 As String, g2 As String
     Dim k1 As String, k2 As String
     Dim isInside As Boolean
     Dim wsPP As Worksheet, wsPB As Worksheet, wsBB As Worksheet, wsDup As Worksheet, wsU As Worksheet
-    Dim rPP As Long, rPB As Long, rBB As Long, rDup As Long, rU As Long
-    Dim unresolvedCount As Long
+    Dim nPP As Long, nPB As Long, nBB As Long, nDup As Long, nU As Long
+    Dim arrPP() As Variant, arrPB() As Variant, arrBB() As Variant, arrDup() As Variant, arrU() As Variant
+    Dim tg As String, tk As String
 
     Set counts = CreateObject("Scripting.Dictionary")
     counts.Add SHEET_PART_PART, 0
@@ -419,15 +467,19 @@ Private Function ClassifyAndWrite(ByVal outWb As Workbook, ByVal clashes As Coll
     counts.Add SHEET_DUP, 0
     counts.Add SHEET_UNRESOLVED, 0
 
-    ' Clear default blank sheet(s) after we add ours
     Set wsPP = AddOutputSheet(outWb, SHEET_PART_PART, "PROFILE1", "PROFILE2")
     Set wsPB = AddOutputSheet(outWb, SHEET_PART_BOLT, "PROFILE1", "bolt1")
     Set wsBB = AddOutputSheet(outWb, SHEET_BOLT_BOLT, "bolt1", "bolt2")
     Set wsDup = AddOutputSheet(outWb, SHEET_DUP, "PROFILE1", "PROFILE2")
 
-    ' Data starts at row 3 (row 1 = title, row 2 = headers)
-    rPP = 3: rPB = 3: rBB = 3: rDup = 3: rU = 3
-    unresolvedCount = 0
+    maxN = clashes.Count
+    If maxN < 1 Then maxN = 1
+    ReDim arrPP(1 To maxN, 1 To 5)
+    ReDim arrPB(1 To maxN, 1 To 5)
+    ReDim arrBB(1 To maxN, 1 To 5)
+    ReDim arrDup(1 To maxN, 1 To 5)
+    ReDim arrU(1 To maxN, 1 To 5)
+    nPP = 0: nPB = 0: nBB = 0: nDup = 0: nU = 0
     Set wsU = Nothing
 
     For i = 1 To clashes.Count
@@ -439,29 +491,39 @@ Private Function ClassifyAndWrite(ByVal outWb As Workbook, ByVal clashes As Coll
         k2 = KindOf(g2, parts, bolts)
 
         If isInside Then
-            WriteRow wsDup, rDup, FormatGuid(g1), FormatGuid(g2), AttrFor(g1, parts, bolts), AttrFor(g2, parts, bolts)
-            rDup = rDup + 1
-            counts(SHEET_DUP) = counts(SHEET_DUP) + 1
+            nDup = nDup + 1
+            arrDup(nDup, 1) = FormatGuid(g1)
+            arrDup(nDup, 2) = FormatGuid(g2)
+            arrDup(nDup, 3) = AttrFor(g1, parts, bolts)
+            arrDup(nDup, 4) = AttrFor(g2, parts, bolts)
+            arrDup(nDup, 5) = ""
         Else
-            ' Part-bolt: part first
             If k1 = "bolt" And k2 = "part" Then
-                Dim tg As String, tk As String
                 tg = g1: g1 = g2: g2 = tg
                 tk = k1: k1 = k2: k2 = tk
             End If
 
             If k1 = "part" And k2 = "part" Then
-                WriteRow wsPP, rPP, FormatGuid(g1), FormatGuid(g2), AttrFor(g1, parts, bolts), AttrFor(g2, parts, bolts)
-                rPP = rPP + 1
-                counts(SHEET_PART_PART) = counts(SHEET_PART_PART) + 1
+                nPP = nPP + 1
+                arrPP(nPP, 1) = FormatGuid(g1)
+                arrPP(nPP, 2) = FormatGuid(g2)
+                arrPP(nPP, 3) = AttrFor(g1, parts, bolts)
+                arrPP(nPP, 4) = AttrFor(g2, parts, bolts)
+                arrPP(nPP, 5) = ""
             ElseIf k1 = "part" And k2 = "bolt" Then
-                WriteRow wsPB, rPB, FormatGuid(g1), FormatGuid(g2), AttrFor(g1, parts, bolts), AttrFor(g2, parts, bolts)
-                rPB = rPB + 1
-                counts(SHEET_PART_BOLT) = counts(SHEET_PART_BOLT) + 1
+                nPB = nPB + 1
+                arrPB(nPB, 1) = FormatGuid(g1)
+                arrPB(nPB, 2) = FormatGuid(g2)
+                arrPB(nPB, 3) = AttrFor(g1, parts, bolts)
+                arrPB(nPB, 4) = AttrFor(g2, parts, bolts)
+                arrPB(nPB, 5) = ""
             ElseIf k1 = "bolt" And k2 = "bolt" Then
-                WriteRow wsBB, rBB, FormatGuid(g1), FormatGuid(g2), AttrFor(g1, parts, bolts), AttrFor(g2, parts, bolts)
-                rBB = rBB + 1
-                counts(SHEET_BOLT_BOLT) = counts(SHEET_BOLT_BOLT) + 1
+                nBB = nBB + 1
+                arrBB(nBB, 1) = FormatGuid(g1)
+                arrBB(nBB, 2) = FormatGuid(g2)
+                arrBB(nBB, 3) = AttrFor(g1, parts, bolts)
+                arrBB(nBB, 4) = AttrFor(g2, parts, bolts)
+                arrBB(nBB, 5) = ""
             Else
                 If wsU Is Nothing Then
                     Set wsU = outWb.Worksheets.Add(After:=outWb.Sheets(outWb.Sheets.Count))
@@ -477,29 +539,51 @@ Private Function ClassifyAndWrite(ByVal outWb As Workbook, ByVal clashes As Coll
                     wsU.Range("E2").Value = "Log line"
                     wsU.Range("A2:E2").Font.Bold = True
                 End If
-                wsU.Cells(rU, 1).Value = FormatGuid(g1)
-                wsU.Cells(rU, 2).Value = FormatGuid(g2)
-                wsU.Cells(rU, 3).Value = k1
-                wsU.Cells(rU, 4).Value = k2
-                wsU.Cells(rU, 5).Value = item(3)
-                rU = rU + 1
-                unresolvedCount = unresolvedCount + 1
-                counts(SHEET_UNRESOLVED) = unresolvedCount
+                nU = nU + 1
+                arrU(nU, 1) = FormatGuid(g1)
+                arrU(nU, 2) = FormatGuid(g2)
+                arrU(nU, 3) = k1
+                arrU(nU, 4) = k2
+                arrU(nU, 5) = item(3)
             End If
         End If
     Next i
 
-    ' Sort each category sheet by attr columns (whole rows stay together)
+    ' One Range dump per sheet (much faster than writing each cell)
+    DumpRows wsPP, arrPP, nPP
+    DumpRows wsPB, arrPB, nPB
+    DumpRows wsBB, arrBB, nBB
+    DumpRows wsDup, arrDup, nDup
+    If nU > 0 And Not wsU Is Nothing Then DumpRows wsU, arrU, nU
+
+    counts(SHEET_PART_PART) = nPP
+    counts(SHEET_PART_BOLT) = nPB
+    counts(SHEET_BOLT_BOLT) = nBB
+    counts(SHEET_DUP) = nDup
+    counts(SHEET_UNRESOLVED) = nU
+
     SortSheetByAttrColumns wsPP
     SortSheetByAttrColumns wsPB
     SortSheetByAttrColumns wsBB
     SortSheetByAttrColumns wsDup
 
-    ' Remove the default Sheet1 if still present and empty-ish
     CleanupDefaultSheets outWb
 
     Set ClassifyAndWrite = counts
 End Function
+
+Private Sub DumpRows(ByVal ws As Worksheet, ByRef src As Variant, ByVal n As Long)
+    Dim out() As Variant
+    Dim i As Long, j As Long
+    If n < 1 Then Exit Sub
+    ReDim out(1 To n, 1 To 5)
+    For i = 1 To n
+        For j = 1 To 5
+            out(i, j) = src(i, j)
+        Next j
+    Next i
+    ws.Range("A3").Resize(n, 5).Value = out
+End Sub
 
 Private Sub SortSheetByAttrColumns(ByVal ws As Worksheet)
     ' Sort full data block A3:E(last) by Col C then Col D (PROFILE1/bolt1, PROFILE2/bolt2).
@@ -518,14 +602,6 @@ Private Sub SortSheetByAttrColumns(ByVal ws As Worksheet)
         .Orientation = xlTopToBottom
         .Apply
     End With
-End Sub
-
-Private Sub WriteRow(ByVal ws As Worksheet, ByVal r As Long, ByVal g1 As String, ByVal g2 As String, ByVal a1 As Variant, ByVal a2 As Variant)
-    ws.Cells(r, 1).Value = g1
-    ws.Cells(r, 2).Value = g2
-    ws.Cells(r, 3).Value = a1
-    ws.Cells(r, 4).Value = a2
-    ws.Cells(r, 5).Value = "" ' Remarks (manual review)
 End Sub
 
 Private Function AddOutputSheet(ByVal outWb As Workbook, ByVal sheetName As String, _
