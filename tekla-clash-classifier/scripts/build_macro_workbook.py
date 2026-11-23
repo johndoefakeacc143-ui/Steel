@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Build the Tekla Clash Classifier workbook (xlsx shell + embedded VBA import instructions).
+"""Build the Tekla Clash Classifier workbook shell.
 
-True .xlsm with a compiled vbaProject.bin cannot be reliably authored on Linux without Excel.
-This builder creates a ready-to-use workbook shell. After importing the .bas module in Excel
-on Windows, save as .xlsm. A copy is also written beside the .bas for distribution.
+True .xlsm with compiled vbaProject.bin cannot be authored on Linux without Excel.
+After importing TeklaClashClassifier.bas on Windows:
+  - Auto_Open / SetupClassifierUI places a Form Control RUN button
+  - Click RUN → pick 3 files → SaveAs a NEW results workbook
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import shutil
 from pathlib import Path
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 ROOT = Path(__file__).resolve().parents[1]
 BAS_PATH = ROOT / "vba" / "TeklaClashClassifier.bas"
@@ -29,6 +30,8 @@ def build_workbook(out_xlsx: Path, bas_text: str) -> None:
     title_font = Font(bold=True, color="FFFFFF", size=16, name="Calibri")
     label_font = Font(bold=True, size=11)
     hint_font = Font(italic=True, color="666666", size=10)
+    run_fill = PatternFill("solid", fgColor="C00000")
+    run_font = Font(bold=True, color="FFFFFF", size=16)
 
     ws["A1"] = "Tekla Clash Classifier"
     ws["A1"].font = title_font
@@ -38,75 +41,97 @@ def build_workbook(out_xlsx: Path, bas_text: str) -> None:
     ws.row_dimensions[1].height = 28
 
     ws["A2"] = (
-        "1) Enable macros after you import VBA and save as .xlsm.  "
-        "2) Browse/set the 3 input paths below.  "
-        "3) Run macro: RunClashClassification (or Alt+F8)."
+        "Click RUN. Excel asks for 3 files one by one "
+        "(Universal Report → Bolt Checking Report → ClashCheck.log), "
+        "then saves results to a NEW workbook. This classifier file stays intact."
     )
     ws["A2"].font = hint_font
+    ws["A2"].alignment = Alignment(wrap_text=True, vertical="top")
     ws.merge_cells("A2:D2")
+    ws.row_dimensions[2].height = 48
 
-    ws["A3"] = "Universal Report"
-    ws["A4"] = "Bolt Report"
-    ws["A5"] = "ClashCheck.log"
-    for r in (3, 4, 5):
-        ws.cell(r, 1).font = label_font
-        ws.cell(r, 2).fill = PatternFill("solid", fgColor="FFF2CC")
-
+    ws["A3"] = "Output tabs"
     ws["A3"].font = label_font
-    ws["B3"] = ""  # path
-    ws["C3"] = "Browse macro: BrowseUniversal"
-    ws["C4"] = "Browse macro: BrowseBolt"
-    ws["C5"] = "Browse macro: BrowseClashLog"
-    ws["A7"] = "Last status"
-    ws["A8"] = "Last counts"
-    ws["A7"].font = label_font
-    ws["A8"].font = label_font
+    ws["B3"] = (
+        "Part_to_Part_Clash | Part_to_Bolt_Clash | Bolt_to_Bolt_Clash | Duplicate members"
+    )
 
-    ws["A10"] = "RUN"
-    ws["A10"].font = Font(bold=True, color="FFFFFF", size=12)
-    ws["A10"].fill = PatternFill("solid", fgColor="C00000")
-    ws["B10"] = "After VBA import: Developer → Macros → RunClashClassification"
-    ws["A11"] = "Output tabs created"
-    ws["B11"] = "Part_to_Part_Clash | Part_to_Bolt_Clash | Bolt_to_Bolt_Clash | Duplicate members"
-    ws["A12"] = "Column style"
-    ws["B12"] = "GUID1 | GUID2 | (spacer) | attr1 (Profile or BOLT_DIA) | (spacer) | attr2 | Notes (blank for review)"
+    ws["A5"] = "Last status"
+    ws["A5"].font = label_font
+    ws["A6"] = "Last counts"
+    ws["A6"].font = label_font
+    ws["B5"] = ""
+    ws["B6"] = ""
 
-    ws.column_dimensions["A"].width = 22
-    ws.column_dimensions["B"].width = 92
-    ws.column_dimensions["C"].width = 32
-    ws.column_dimensions["D"].width = 20
+    # Visual RUN placeholder (real Form Control button is created by SetupClassifierUI / Auto_Open)
+    ws["A8"] = "RUN"
+    ws["A8"].font = run_font
+    ws["A8"].fill = run_fill
+    ws["A8"].alignment = Alignment(horizontal="center", vertical="center")
+    ws.merge_cells("A8:B9")
+    ws.row_dimensions[8].height = 22
+    ws.row_dimensions[9].height = 22
+    thin = Border(
+        left=Side(style="medium", color="800000"),
+        right=Side(style="medium", color="800000"),
+        top=Side(style="medium", color="800000"),
+        bottom=Side(style="medium", color="800000"),
+    )
+    for row in ws["A8:B9"]:
+        for cell in row:
+            cell.border = thin
+            cell.fill = run_fill
+            cell.font = run_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    ws["A11"] = "Setup note"
+    ws["A11"].font = label_font
+    ws["B11"] = (
+        "After importing TeklaClashClassifier.bas and saving as .xlsm, "
+        "run macro SetupClassifierUI once (or reopen the file) to place the clickable Form Control RUN button "
+        "on top of this area. Then click RUN."
+    )
+    ws["B11"].alignment = Alignment(wrap_text=True)
+    ws.row_dimensions[11].height = 40
+
+    ws.column_dimensions["A"].width = 16
+    ws.column_dimensions["B"].width = 90
+    ws.column_dimensions["C"].width = 14
+    ws.column_dimensions["D"].width = 14
 
     # --- Instructions ---
     ins = wb.create_sheet("Instructions")
     lines = [
         "How to enable and run (Windows Excel)",
         "",
-        "A. Import the VBA module (one-time setup)",
+        "A. One-time setup",
         "  1. Open this workbook in Excel.",
         "  2. Save As → Excel Macro-Enabled Workbook (*.xlsm).",
-        "  3. Press Alt+F11 to open the VBA editor.",
-        "  4. File → Import File… → select TeklaClashClassifier.bas (same folder / docs/vba).",
-        "     Or copy all text from the VBA_Code sheet into a new Module.",
-        "  5. Close the VBA editor and save the .xlsm.",
+        "  3. Alt+F11 → File → Import File… → TeklaClashClassifier.bas",
+        "     (or copy the VBA_Code sheet into a new Module).",
+        "  4. Save, close VBA editor.",
+        "  5. Alt+F8 → SetupClassifierUI → Run  (places the RUN Form Control button).",
+        "     Or simply reopen the .xlsm (Auto_Open calls SetupClassifierUI).",
         "",
         "B. Allow macros",
-        "  - File → Options → Trust Center → Trust Center Settings → Macro Settings",
-        "  - Choose 'Disable all macros with notification' (recommended) or enable for this file.",
-        "  - When you reopen the workbook, click Enable Content if prompted.",
+        "  - Trust Center → Macro Settings → Disable all macros with notification",
+        "  - Click Enable Content when prompted",
         "",
-        "C. Run classification",
-        "  1. On the Control sheet, fill B3/B4/B5 with paths, or Alt+F8 → BrowseUniversal / BrowseBolt / BrowseClashLog.",
-        "  2. Alt+F8 → RunClashClassification → Run.",
-        "  3. Review sheets: Part_to_Part_Clash, Part_to_Bolt_Clash, Bolt_to_Bolt_Clash, Duplicate members.",
-        "  4. Column G (Notes) is left blank for manual review comments (same idea as sample final tabs).",
+        "C. Run (every time)",
+        "  1. Click the RUN button on the Control sheet.",
+        "  2. Select Universal Report (.xlsx/.xls).",
+        "  3. Select Bolt Checking Report (.xlsx/.xls/.csv).",
+        "  4. Select ClashCheck.log (.log/.txt).",
+        "  5. Choose where to Save the NEW results workbook.",
+        "  6. Results open as a separate file with 4 tabs; this classifier .xlsm is unchanged.",
         "",
-        "D. Inputs",
-        "  - Universal Report: .xlsx (GUID column auto-detected; title rows skipped).",
-        "  - Bolt report: .xlsx or .csv (GUID values are Trimmed).",
-        "  - ClashCheck.log: Tekla clash log lines 'Clash -> Guid: … <-> Guid: …'.",
-        "  - Lines whose description contains 'inside member' go to 'Duplicate members'.",
+        "D. Output tabs",
+        "  - Part_to_Part_Clash",
+        "  - Part_to_Bolt_Clash",
+        "  - Bolt_to_Bolt_Clash",
+        "  - Duplicate members  (ClashCheck.log line contains 'inside member')",
         "",
-        "E. Python alternative (no VBA)",
+        "E. Python alternative (optional)",
         "  python tekla-clash-classifier/scripts/classify_clashes.py \\",
         "    --universal Universal_Report.xlsx \\",
         "    --bolt BOLT_CHECKING_REPORT.xlsx \\",
@@ -121,52 +146,33 @@ def build_workbook(out_xlsx: Path, bas_text: str) -> None:
 
     # --- VBA_Code ---
     vba_sheet = wb.create_sheet("VBA_Code")
-    vba_sheet["A1"] = "Paste this module into VBA (or import TeklaClashClassifier.bas). Do not edit paths here."
+    vba_sheet["A1"] = (
+        "Import TeklaClashClassifier.bas (preferred), or paste this module into VBA. "
+        "Entry point: RunClashClassification. Button setup: SetupClassifierUI."
+    )
     vba_sheet["A1"].font = Font(bold=True)
     for i, line in enumerate(bas_text.splitlines(), 2):
         vba_sheet.cell(i, 1, line)
     vba_sheet.column_dimensions["A"].width = 120
 
-    # Placeholder output sheets (cleared/rewritten by macro)
-    for name in (
-        "Part_to_Part_Clash",
-        "Part_to_Bolt_Clash",
-        "Bolt_to_Bolt_Clash",
-        "Duplicate members",
-    ):
-        s = wb.create_sheet(name)
-        s["A1"] = "GUID1"
-        s["B1"] = "GUID2"
-        s["A1"].font = Font(bold=True)
-        s["B1"].font = Font(bold=True)
-        s["A2"] = "(Run RunClashClassification to populate)"
+    # No result category tabs in the classifier workbook — results go to a new file.
 
     out_xlsx.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out_xlsx)
 
 
 def try_write_xlsm_shell(xlsx_path: Path, xlsm_path: Path) -> str:
-    """Place a .xlsm filename next to the .xlsx shell.
-
-    A compiled vbaProject.bin cannot be authored on Linux without Excel, so this
-    file is the same OpenXML workbook as the .xlsx. On Windows: open it (or the
-    .xlsx), import TeklaClashClassifier.bas, then Save As *.xlsm to embed macros.
-    """
+    """Place a .xlsm filename next to the .xlsx shell (no compiled VBA on Linux)."""
     shutil.copy2(xlsx_path, xlsm_path)
     return (
         "Wrote .xlsm filename copy of the xlsx shell (no compiled VBA binary). "
-        "Import TeklaClashClassifier.bas in Excel, then Save As .xlsm."
+        "Import TeklaClashClassifier.bas in Excel, run SetupClassifierUI, Save As .xlsm."
     )
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "--out-dir",
-        type=Path,
-        default=ROOT / "dist",
-        help="Output directory for workbook + bas copy",
-    )
+    ap.add_argument("--out-dir", type=Path, default=ROOT / "dist")
     args = ap.parse_args()
     bas_text = BAS_PATH.read_text(encoding="utf-8")
     out_dir = args.out_dir

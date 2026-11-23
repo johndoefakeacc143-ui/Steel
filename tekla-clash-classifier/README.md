@@ -23,7 +23,9 @@ python3 scripts/classify_clashes.py \
 python3 scripts/build_macro_workbook.py --out-dir dist
 ```
 
-Open `dist/tekla-clash-classifier.xlsx`, import `dist/TeklaClashClassifier.bas` in the VBA editor, Save As `.xlsm`, then run `RunClashClassification`.
+1. Open `dist/tekla-clash-classifier.xlsx`, import `TeklaClashClassifier.bas`, Save As `.xlsm`.
+2. Run `SetupClassifierUI` once (or reopen) to place the **RUN** Form Control button.
+3. Click **RUN** → pick Universal / Bolt / ClashCheck.log → SaveAs a **new** results workbook.
 
 See Project store howto: `docs/tekla-clash-macro-howto.md`.
 

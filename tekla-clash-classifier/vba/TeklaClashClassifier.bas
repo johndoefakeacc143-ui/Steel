@@ -2,13 +2,9 @@ Attribute VB_Name = "TeklaClashClassifier"
 Option Explicit
 
 ' Tekla Clash Classifier
-' Entry point: RunClashClassification
-' Sheets written:
-'   Part_to_Part_Clash
-'   Part_to_Bolt_Clash
-'   Bolt_to_Bolt_Clash
-'   Duplicate members
-' Plus Summary / Unresolved
+' One entry point: RunClashClassification (assigned to the RUN button)
+' Flow: pick Universal -> Bolt -> ClashCheck.log -> write NEW workbook with 4 tabs.
+' The classifier workbook itself is never overwritten with result sheets.
 
 Private Const SHEET_CONTROL As String = "Control"
 Private Const SHEET_PART_PART As String = "Part_to_Part_Clash"
@@ -17,80 +13,143 @@ Private Const SHEET_BOLT_BOLT As String = "Bolt_to_Bolt_Clash"
 Private Const SHEET_DUP As String = "Duplicate members"
 Private Const SHEET_SUMMARY As String = "Summary"
 Private Const SHEET_UNRESOLVED As String = "Unresolved"
+Private Const RUN_BUTTON_NAME As String = "btnRunClashClassification"
 
+' Runs when the macro-enabled workbook opens (after VBA is imported).
+Public Sub Auto_Open()
+    On Error Resume Next
+    SetupClassifierUI
+End Sub
+
+' One-time / repair: rebuild Control sheet + RUN Form Control button.
+Public Sub SetupClassifierUI()
+    Dim ws As Worksheet
+    EnsureControlSheet
+    Set ws = ThisWorkbook.Sheets(SHEET_CONTROL)
+    EnsureRunButton ws
+End Sub
+
+' === MAIN ENTRY (wire this to the RUN button) ===
 Public Sub RunClashClassification()
     Dim universalPath As String
     Dim boltPath As String
     Dim clashPath As String
+    Dim outPath As Variant
     Dim parts As Object
     Dim bolts As Object
     Dim clashes As Collection
     Dim counts As Object
+    Dim outWb As Workbook
+    Dim statusLine As String
 
     On Error GoTo Fail
 
+    EnsureControlSheet
+    EnsureRunButton ThisWorkbook.Sheets(SHEET_CONTROL)
+
+    ' 1) Universal Report
+    universalPath = Application.GetOpenFilename( _
+        FileFilter:="Excel Files (*.xlsx;*.xlsm;*.xls),*.xlsx;*.xlsm;*.xls", _
+        Title:="Step 1 of 3 — Select Universal Report", _
+        MultiSelect:=False)
+    If universalPath = "False" Or Len(universalPath) = 0 Then
+        MsgBox "Cancelled: Universal Report was not selected.", vbExclamation, "Tekla Clash Classifier"
+        Exit Sub
+    End If
+
+    ' 2) Bolt Checking Report
+    boltPath = Application.GetOpenFilename( _
+        FileFilter:="Bolt Report (*.xlsx;*.xlsm;*.xls;*.csv),*.xlsx;*.xlsm;*.xls;*.csv", _
+        Title:="Step 2 of 3 — Select Bolt Checking Report", _
+        MultiSelect:=False)
+    If boltPath = "False" Or Len(boltPath) = 0 Then
+        MsgBox "Cancelled: Bolt Checking Report was not selected.", vbExclamation, "Tekla Clash Classifier"
+        Exit Sub
+    End If
+
+    ' 3) ClashCheck.log
+    clashPath = Application.GetOpenFilename( _
+        FileFilter:="Clash Log (*.log;*.txt),*.log;*.txt,All Files (*.*),*.*", _
+        Title:="Step 3 of 3 — Select ClashCheck.log", _
+        MultiSelect:=False)
+    If clashPath = "False" Or Len(clashPath) = 0 Then
+        MsgBox "Cancelled: ClashCheck.log was not selected.", vbExclamation, "Tekla Clash Classifier"
+        Exit Sub
+    End If
+
     Application.ScreenUpdating = False
     Application.Calculation = xlCalculationManual
+    Application.StatusBar = "Loading Universal Report…"
 
-    EnsureControlSheet
-    universalPath = Trim$(CStr(ThisWorkbook.Sheets(SHEET_CONTROL).Range("B3").Value))
-    boltPath = Trim$(CStr(ThisWorkbook.Sheets(SHEET_CONTROL).Range("B4").Value))
-    clashPath = Trim$(CStr(ThisWorkbook.Sheets(SHEET_CONTROL).Range("B5").Value))
+    Set parts = LoadParts(CStr(universalPath))
+    Application.StatusBar = "Loading Bolt report…"
+    Set bolts = LoadBolts(CStr(boltPath))
+    Application.StatusBar = "Parsing ClashCheck.log…"
+    Set clashes = ParseClashLog(CStr(clashPath))
 
-    If Len(universalPath) = 0 Or Len(Dir$(universalPath)) = 0 Then
-        Err.Raise vbObjectError + 1, , "Universal Report path is missing or file not found. Use Browse or fill Control!B3."
-    End If
-    If Len(boltPath) = 0 Or Len(Dir$(boltPath)) = 0 Then
-        Err.Raise vbObjectError + 2, , "Bolt report path is missing or file not found. Use Browse or fill Control!B4."
-    End If
-    If Len(clashPath) = 0 Or Len(Dir$(clashPath)) = 0 Then
-        Err.Raise vbObjectError + 3, , "ClashCheck.log path is missing or file not found. Use Browse or fill Control!B5."
-    End If
+    Application.StatusBar = "Classifying clashes…"
+    Set outWb = Workbooks.Add(xlWBATWorksheet)
+    Set counts = ClassifyAndWrite(outWb, clashes, parts, bolts)
+    WriteSummary outWb, CStr(universalPath), CStr(boltPath), CStr(clashPath), _
+        parts.Count, bolts.Count, clashes.Count, counts
 
-    Set parts = LoadParts(universalPath)
-    Set bolts = LoadBolts(boltPath)
-    Set clashes = ParseClashLog(clashPath)
-    Set counts = ClassifyAndWrite(clashes, parts, bolts)
+    ' Put Summary first, then the four category tabs
+    On Error Resume Next
+    outWb.Sheets(SHEET_SUMMARY).Move Before:=outWb.Sheets(1)
+    On Error GoTo Fail
 
-    WriteSummary universalPath, boltPath, clashPath, parts.Count, bolts.Count, clashes.Count, counts
-
-    ThisWorkbook.Sheets(SHEET_CONTROL).Range("B7").Value = "OK " & Format$(Now, "yyyy-mm-dd hh:nn:ss")
-    ThisWorkbook.Sheets(SHEET_CONTROL).Range("B8").Value = _
-        "Part-Part=" & counts(SHEET_PART_PART) & _
-        " | Part-Bolt=" & counts(SHEET_PART_BOLT) & _
-        " | Bolt-Bolt=" & counts(SHEET_BOLT_BOLT) & _
-        " | Duplicate=" & counts(SHEET_DUP) & _
-        " | Unresolved=" & counts(SHEET_UNRESOLVED)
-
-    Application.Calculation = xlCalculationAutomatic
     Application.ScreenUpdating = True
-    MsgBox "Clash classification complete." & vbCrLf & ThisWorkbook.Sheets(SHEET_CONTROL).Range("B8").Value, vbInformation, "Tekla Clash Classifier"
+    Application.Calculation = xlCalculationAutomatic
+    Application.StatusBar = False
+
+    outPath = Application.GetSaveAsFilename( _
+        InitialFileName:="Tekla_Clash_Classification.xlsx", _
+        FileFilter:="Excel Workbook (*.xlsx),*.xlsx", _
+        Title:="Save classified clash results")
+    If outPath = False Or Len(CStr(outPath)) = 0 Then
+        ' Leave the new workbook open unsaved; classifier XLSM untouched.
+        statusLine = "Complete (output not saved yet) | " & CountSummary(counts)
+        UpdateControlStatus "OK (unsaved output)", statusLine
+        MsgBox "Classification complete. Save the new workbook when ready." & vbCrLf & statusLine, _
+            vbInformation, "Tekla Clash Classifier"
+        Exit Sub
+    End If
+
+    Application.DisplayAlerts = False
+    outWb.SaveAs Filename:=CStr(outPath), FileFormat:=xlOpenXMLWorkbook
+    Application.DisplayAlerts = True
+
+    statusLine = CountSummary(counts)
+    UpdateControlStatus "OK " & Format$(Now, "yyyy-mm-dd hh:nn:ss"), statusLine & " | Saved: " & CStr(outPath)
+
+    MsgBox "Clash classification complete." & vbCrLf & statusLine & vbCrLf & "Saved: " & CStr(outPath), _
+        vbInformation, "Tekla Clash Classifier"
     Exit Sub
 
 Fail:
     Application.Calculation = xlCalculationAutomatic
     Application.ScreenUpdating = True
-    ThisWorkbook.Sheets(SHEET_CONTROL).Range("B7").Value = "ERROR"
-    ThisWorkbook.Sheets(SHEET_CONTROL).Range("B8").Value = Err.Description
+    Application.StatusBar = False
+    Application.DisplayAlerts = True
+    UpdateControlStatus "ERROR", Err.Description
     MsgBox "Error: " & Err.Description, vbCritical, "Tekla Clash Classifier"
 End Sub
 
-Public Sub BrowseUniversal()
-    Dim p As String
-    p = PickFile("Select Universal Report (*.xlsx;*.xlsm;*.csv)", "Excel/CSV Files,*.xlsx;*.xlsm;*.xls;*.csv")
-    If Len(p) > 0 Then ThisWorkbook.Sheets(SHEET_CONTROL).Range("B3").Value = p
-End Sub
+Private Function CountSummary(ByVal counts As Object) As String
+    CountSummary = _
+        "Part-Part=" & counts(SHEET_PART_PART) & _
+        " | Part-Bolt=" & counts(SHEET_PART_BOLT) & _
+        " | Bolt-Bolt=" & counts(SHEET_BOLT_BOLT) & _
+        " | Duplicate=" & counts(SHEET_DUP) & _
+        " | Unresolved=" & counts(SHEET_UNRESOLVED)
+End Function
 
-Public Sub BrowseBolt()
-    Dim p As String
-    p = PickFile("Select Bolt Checking Report (*.xlsx;*.csv)", "Excel/CSV Files,*.xlsx;*.xlsm;*.xls;*.csv")
-    If Len(p) > 0 Then ThisWorkbook.Sheets(SHEET_CONTROL).Range("B4").Value = p
-End Sub
-
-Public Sub BrowseClashLog()
-    Dim p As String
-    p = PickFile("Select ClashCheck.log", "Log Files,*.log;*.txt,All Files,*.*")
-    If Len(p) > 0 Then ThisWorkbook.Sheets(SHEET_CONTROL).Range("B5").Value = p
+Private Sub UpdateControlStatus(ByVal statusText As String, ByVal countsText As String)
+    On Error Resume Next
+    With ThisWorkbook.Sheets(SHEET_CONTROL)
+        .Range("B5").Value = statusText
+        .Range("B6").Value = countsText
+    End With
 End Sub
 
 Public Sub EnsureControlSheet()
@@ -102,42 +161,68 @@ Public Sub EnsureControlSheet()
         Set ws = ThisWorkbook.Worksheets.Add(Before:=ThisWorkbook.Sheets(1))
         ws.Name = SHEET_CONTROL
     End If
+
+    ws.Cells.Clear
+    ' Remove leftover Form/ActiveX buttons except we recreate RUN below
+    DeleteAllButtons ws
+
     ws.Range("A1").Value = "Tekla Clash Classifier"
     ws.Range("A1").Font.Bold = True
-    ws.Range("A1").Font.Size = 14
-    ws.Range("A2").Value = "Set the three input paths (or use Browse macros), then run RunClashClassification."
-    ws.Range("A3").Value = "Universal Report"
-    ws.Range("A4").Value = "Bolt Report"
-    ws.Range("A5").Value = "ClashCheck.log"
-    ws.Range("A7").Value = "Last status"
-    ws.Range("A8").Value = "Last counts"
-    ws.Columns("A").ColumnWidth = 22
+    ws.Range("A1").Font.Size = 16
+    ws.Range("A1").Font.Color = RGB(255, 255, 255)
+    ws.Range("A1").Interior.Color = RGB(31, 78, 121)
+    ws.Range("A1:D1").Merge
+    ws.Rows(1).RowHeight = 28
+
+    ws.Range("A2").Value = "Click RUN. You will be asked for 3 files one by one (Universal Report → Bolt Report → ClashCheck.log). Results are saved to a NEW Excel workbook — this classifier file stays unchanged."
+    ws.Range("A2").WrapText = True
+    ws.Range("A2:D2").Merge
+    ws.Rows(2).RowHeight = 48
+
+    ws.Range("A3").Value = "Output tabs"
+    ws.Range("A3").Font.Bold = True
+    ws.Range("B3").Value = "Part_to_Part_Clash | Part_to_Bolt_Clash | Bolt_to_Bolt_Clash | Duplicate members"
+
+    ws.Range("A5").Value = "Last status"
+    ws.Range("A5").Font.Bold = True
+    ws.Range("A6").Value = "Last counts"
+    ws.Range("A6").Font.Bold = True
+    ws.Range("B5").Value = ""
+    ws.Range("B6").Value = ""
+
+    ws.Columns("A").ColumnWidth = 16
     ws.Columns("B").ColumnWidth = 90
+    ws.Columns("C").ColumnWidth = 14
+    ws.Columns("D").ColumnWidth = 14
 End Sub
 
-Private Function PickFile(ByVal title As String, ByVal filter As String) As String
-    Dim fd As FileDialog
-    Set fd = Application.FileDialog(msoFileDialogFilePicker)
-    With fd
-        .AllowMultiSelect = False
-        .Title = title
-        .Filters.Clear
-        ' filter string like "Excel,*.xlsx;*.csv"
-        Dim parts() As String
-        parts = Split(filter, ",")
-        Dim i As Long
-        For i = 0 To UBound(parts) Step 2
-            If i + 1 <= UBound(parts) Then
-                .Filters.Add parts(i), parts(i + 1)
-            End If
-        Next i
-        If .Show = -1 Then
-            PickFile = .SelectedItems(1)
-        Else
-            PickFile = ""
-        End If
-    End With
-End Function
+Private Sub EnsureRunButton(ByVal ws As Worksheet)
+    Dim btn As Button
+    Dim leftPos As Double, topPos As Double
+
+    On Error Resume Next
+    ws.Buttons(RUN_BUTTON_NAME).Delete
+    On Error GoTo 0
+
+    ' Place RUN button under the instructions (row 8 area)
+    leftPos = ws.Range("A8").Left
+    topPos = ws.Range("A8").Top
+    Set btn = ws.Buttons.Add(leftPos, topPos, 120, 36)
+    btn.Name = RUN_BUTTON_NAME
+    btn.Caption = "RUN"
+    btn.OnAction = "RunClashClassification"
+    btn.Font.Bold = True
+    btn.Font.Size = 14
+End Sub
+
+Private Sub DeleteAllButtons(ByVal ws As Worksheet)
+    Dim b As Button
+    On Error Resume Next
+    For Each b In ws.Buttons
+        b.Delete
+    Next b
+    On Error GoTo 0
+End Sub
 
 Private Function NormalizeGuid(ByVal value As Variant) As String
     Dim s As String
@@ -174,19 +259,11 @@ Private Function LoadParts(ByVal path As String) As Object
     Dim profileCol As Long, nameCol As Long
     Dim lastRow As Long, r As Long
     Dim guid As String
-    Dim opened As Boolean
 
     Set dict = CreateObject("Scripting.Dictionary")
     dict.CompareMode = 1 ' TextCompare
 
-    If LCase$(Right$(path, 4)) = ".csv" Then
-        Set wb = Workbooks.Open(Filename:=path, ReadOnly:=True, Local:=True)
-        opened = True
-    Else
-        Set wb = Workbooks.Open(Filename:=path, ReadOnly:=True)
-        opened = True
-    End If
-
+    Set wb = Workbooks.Open(Filename:=path, ReadOnly:=True)
     Set ws = PickBestSheet(wb, "universal,report,part")
     FindHeaderRowAndGuidCol ws, headerRow, guidCol
     profileCol = FindColByNames(ws, headerRow, Array("Profile"))
@@ -207,7 +284,7 @@ Private Function LoadParts(ByVal path As String) As Object
         End If
     Next r
 
-    If opened Then wb.Close SaveChanges:=False
+    wb.Close SaveChanges:=False
     Set LoadParts = dict
 End Function
 
@@ -219,14 +296,12 @@ Private Function LoadBolts(ByVal path As String) As Object
     Dim diaCol As Long, stdCol As Long
     Dim lastRow As Long, r As Long
     Dim guid As String
-    Dim opened As Boolean
     Dim diaVal As Variant
 
     Set dict = CreateObject("Scripting.Dictionary")
     dict.CompareMode = 1
 
     Set wb = Workbooks.Open(Filename:=path, ReadOnly:=True, Local:=True)
-    opened = True
     Set ws = PickBestSheet(wb, "bolt,report")
     FindHeaderRowAndGuidCol ws, headerRow, guidCol
     diaCol = FindColByNames(ws, headerRow, Array("BOLT_DIA", "Bolt_Dia", "Diameter", "DIA"))
@@ -254,7 +329,7 @@ Private Function LoadBolts(ByVal path As String) As Object
         End If
     Next r
 
-    If opened Then wb.Close SaveChanges:=False
+    wb.Close SaveChanges:=False
     Set LoadBolts = dict
 End Function
 
@@ -314,7 +389,9 @@ Private Function AttrFor(ByVal guid As String, ByVal parts As Object, ByVal bolt
     End If
 End Function
 
-Private Function ClassifyAndWrite(ByVal clashes As Collection, ByVal parts As Object, ByVal bolts As Object) As Object
+Private Function ClassifyAndWrite(ByVal outWb As Workbook, ByVal clashes As Collection, _
+    ByVal parts As Object, ByVal bolts As Object) As Object
+
     Dim counts As Object
     Dim i As Long
     Dim item As Variant
@@ -323,6 +400,7 @@ Private Function ClassifyAndWrite(ByVal clashes As Collection, ByVal parts As Ob
     Dim isInside As Boolean
     Dim wsPP As Worksheet, wsPB As Worksheet, wsBB As Worksheet, wsDup As Worksheet, wsU As Worksheet
     Dim rPP As Long, rPB As Long, rBB As Long, rDup As Long, rU As Long
+    Dim unresolvedCount As Long
 
     Set counts = CreateObject("Scripting.Dictionary")
     counts.Add SHEET_PART_PART, 0
@@ -331,19 +409,15 @@ Private Function ClassifyAndWrite(ByVal clashes As Collection, ByVal parts As Ob
     counts.Add SHEET_DUP, 0
     counts.Add SHEET_UNRESOLVED, 0
 
-    Set wsPP = ResetOutputSheet(SHEET_PART_PART, True)
-    Set wsPB = ResetOutputSheet(SHEET_PART_BOLT, True)
-    Set wsBB = ResetOutputSheet(SHEET_BOLT_BOLT, True)
-    Set wsDup = ResetOutputSheet(SHEET_DUP, True)
-    Set wsU = ResetOutputSheet(SHEET_UNRESOLVED, False)
-    wsU.Range("A1").Value = "GUID1"
-    wsU.Range("B1").Value = "GUID2"
-    wsU.Range("C1").Value = "Kind1"
-    wsU.Range("D1").Value = "Kind2"
-    wsU.Range("E1").Value = "Log line"
-    wsU.Range("A1:E1").Font.Bold = True
+    ' Clear default blank sheet(s) after we add ours
+    Set wsPP = AddOutputSheet(outWb, SHEET_PART_PART, True)
+    Set wsPB = AddOutputSheet(outWb, SHEET_PART_BOLT, True)
+    Set wsBB = AddOutputSheet(outWb, SHEET_BOLT_BOLT, True)
+    Set wsDup = AddOutputSheet(outWb, SHEET_DUP, True)
 
     rPP = 2: rPB = 2: rBB = 2: rDup = 2: rU = 2
+    unresolvedCount = 0
+    Set wsU = Nothing
 
     For i = 1 To clashes.Count
         item = clashes(i)
@@ -378,16 +452,29 @@ Private Function ClassifyAndWrite(ByVal clashes As Collection, ByVal parts As Ob
                 rBB = rBB + 1
                 counts(SHEET_BOLT_BOLT) = counts(SHEET_BOLT_BOLT) + 1
             Else
+                If wsU Is Nothing Then
+                    Set wsU = AddOutputSheet(outWb, SHEET_UNRESOLVED, False)
+                    wsU.Range("A1").Value = "GUID1"
+                    wsU.Range("B1").Value = "GUID2"
+                    wsU.Range("C1").Value = "Kind1"
+                    wsU.Range("D1").Value = "Kind2"
+                    wsU.Range("E1").Value = "Log line"
+                    wsU.Range("A1:E1").Font.Bold = True
+                End If
                 wsU.Cells(rU, 1).Value = FormatGuid(g1)
                 wsU.Cells(rU, 2).Value = FormatGuid(g2)
                 wsU.Cells(rU, 3).Value = k1
                 wsU.Cells(rU, 4).Value = k2
                 wsU.Cells(rU, 5).Value = item(3)
                 rU = rU + 1
-                counts(SHEET_UNRESOLVED) = counts(SHEET_UNRESOLVED) + 1
+                unresolvedCount = unresolvedCount + 1
+                counts(SHEET_UNRESOLVED) = unresolvedCount
             End If
         End If
     Next i
+
+    ' Remove the default Sheet1 if still present and empty-ish
+    CleanupDefaultSheets outWb
 
     Set ClassifyAndWrite = counts
 End Function
@@ -399,17 +486,12 @@ Private Sub WriteRow(ByVal ws As Worksheet, ByVal r As Long, ByVal g1 As String,
     ws.Cells(r, 4).Value = a1
     ws.Cells(r, 5).Value = " "
     ws.Cells(r, 6).Value = a2
-    ws.Cells(r, 7).Value = "" ' Notes (manual review) — matches sample final-tab style
+    ws.Cells(r, 7).Value = "" ' Notes (manual review)
 End Sub
 
-Private Function ResetOutputSheet(ByVal sheetName As String, ByVal withGuidHeader As Boolean) As Worksheet
+Private Function AddOutputSheet(ByVal outWb As Workbook, ByVal sheetName As String, ByVal withGuidHeader As Boolean) As Worksheet
     Dim ws As Worksheet
-    On Error Resume Next
-    Application.DisplayAlerts = False
-    ThisWorkbook.Sheets(sheetName).Delete
-    Application.DisplayAlerts = True
-    On Error GoTo 0
-    Set ws = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
+    Set ws = outWb.Worksheets.Add(After:=outWb.Sheets(outWb.Sheets.Count))
     ws.Name = sheetName
     If withGuidHeader Then
         ws.Range("A1").Value = "GUID1"
@@ -423,20 +505,29 @@ Private Function ResetOutputSheet(ByVal sheetName As String, ByVal withGuidHeade
     ws.Columns("E").ColumnWidth = 3
     ws.Columns("F").ColumnWidth = 18
     ws.Columns("G").ColumnWidth = 40
-    Set ResetOutputSheet = ws
+    Set AddOutputSheet = ws
 End Function
 
-Private Sub WriteSummary(ByVal u As String, ByVal b As String, ByVal c As String, _
+Private Sub CleanupDefaultSheets(ByVal outWb As Workbook)
+    Dim ws As Worksheet
+    Dim nm As String
+    On Error Resume Next
+    Application.DisplayAlerts = False
+    For Each ws In outWb.Worksheets
+        nm = ws.Name
+        If nm = "Sheet1" Or nm = "Sheet2" Or nm = "Sheet3" Then
+            If outWb.Worksheets.Count > 1 Then ws.Delete
+        End If
+    Next ws
+    Application.DisplayAlerts = True
+    On Error GoTo 0
+End Sub
+
+Private Sub WriteSummary(ByVal outWb As Workbook, ByVal u As String, ByVal b As String, ByVal c As String, _
     ByVal partCount As Long, ByVal boltCount As Long, ByVal clashCount As Long, ByVal counts As Object)
 
     Dim ws As Worksheet
-    On Error Resume Next
-    Application.DisplayAlerts = False
-    ThisWorkbook.Sheets(SHEET_SUMMARY).Delete
-    Application.DisplayAlerts = True
-    On Error GoTo 0
-    Set ws = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Sheets(SHEET_CONTROL))
-    ws.Name = SHEET_SUMMARY
+    Set ws = AddOutputSheet(outWb, SHEET_SUMMARY, False)
     ws.Range("A1").Value = "Tekla Clash Classification Summary"
     ws.Range("A1").Font.Bold = True
     ws.Range("A1").Font.Size = 14
