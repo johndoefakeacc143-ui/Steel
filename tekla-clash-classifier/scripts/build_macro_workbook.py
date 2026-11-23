@@ -84,7 +84,7 @@ def build_workbook(out_xlsx: Path, bas_text: str) -> None:
 
     ws["A2"] = (
         "Click the RUN button below. Excel asks for 3 files one by one "
-        "(Universal Report → Bolt Checking Report → ClashCheck.log), "
+        "(Universal Report -> Bolt Checking Report -> ClashCheck.log), "
         "then saves results to a NEW workbook. This classifier file stays intact."
     )
     ws["A2"].font = hint_font
@@ -105,21 +105,22 @@ def build_workbook(out_xlsx: Path, bas_text: str) -> None:
     ws["B5"] = ""
     ws["B6"] = ""
 
-    # Leave rows 8–9 clear for the embedded Form Control button (VML).
+    # Leave rows 8-9 clear for the embedded Form Control button (VML).
     ws["A8"] = ""
     ws["B8"] = ""
     ws.row_dimensions[8].height = 24
     ws.row_dimensions[9].height = 24
 
-    ws["A11"] = "First-time setup"
+    ws["A11"] = "If macros blocked"
     ws["A11"].font = label_font
     ws["B11"] = (
-        "1) Save As .xlsm  2) Alt+F11 → Import TeklaClashClassifier.bas  "
-        "3) Enable Content  4) Click RUN. "
-        "(If the button is missing, Alt+F8 → SetupClassifierUI.)"
+        "Close Excel. Right-click this .xlsm in File Explorer -> Properties -> "
+        "check Unblock -> OK. Re-open and Enable Content. "
+        "Then Alt+F11 -> Import TeklaClashClassifier.bas. "
+        "If RUN is missing: Alt+F8 -> SetupClassifierUI."
     )
     ws["B11"].alignment = Alignment(wrap_text=True)
-    ws.row_dimensions[11].height = 40
+    ws.row_dimensions[11].height = 48
 
     ws.column_dimensions["A"].width = 16
     ws.column_dimensions["B"].width = 90
@@ -132,11 +133,11 @@ def build_workbook(out_xlsx: Path, bas_text: str) -> None:
         "",
         "A. One-time setup",
         "  1. Open this workbook in Excel.",
-        "  2. Save As → Excel Macro-Enabled Workbook (*.xlsm).",
-        "  3. Alt+F11 → File → Import File… → TeklaClashClassifier.bas",
+        "  2. Save As -> Excel Macro-Enabled Workbook (*.xlsm).",
+        "  3. Alt+F11 -> File -> Import File... -> TeklaClashClassifier.bas",
         "  4. Save. Click Enable Content if prompted.",
         "  5. The Control sheet already has a RUN Form Control button.",
-        "     If you do not see it: Alt+F8 → SetupClassifierUI → Run.",
+        "     If you do not see it: Alt+F8 -> SetupClassifierUI -> Run.",
         "",
         "B. Every run",
         "  1. Click RUN on the Control sheet.",

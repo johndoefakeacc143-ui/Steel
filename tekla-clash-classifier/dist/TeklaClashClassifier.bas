@@ -50,7 +50,7 @@ Public Sub RunClashClassification()
     ' 1) Universal Report
     universalPath = Application.GetOpenFilename( _
         FileFilter:="Excel Files (*.xlsx;*.xlsm;*.xls),*.xlsx;*.xlsm;*.xls", _
-        Title:="Step 1 of 3 — Select Universal Report", _
+        Title:="Step 1 of 3 - Select Universal Report", _
         MultiSelect:=False)
     If universalPath = "False" Or Len(universalPath) = 0 Then
         MsgBox "Cancelled: Universal Report was not selected.", vbExclamation, "Tekla Clash Classifier"
@@ -60,7 +60,7 @@ Public Sub RunClashClassification()
     ' 2) Bolt Checking Report
     boltPath = Application.GetOpenFilename( _
         FileFilter:="Bolt Report (*.xlsx;*.xlsm;*.xls;*.csv),*.xlsx;*.xlsm;*.xls;*.csv", _
-        Title:="Step 2 of 3 — Select Bolt Checking Report", _
+        Title:="Step 2 of 3 - Select Bolt Checking Report", _
         MultiSelect:=False)
     If boltPath = "False" Or Len(boltPath) = 0 Then
         MsgBox "Cancelled: Bolt Checking Report was not selected.", vbExclamation, "Tekla Clash Classifier"
@@ -70,7 +70,7 @@ Public Sub RunClashClassification()
     ' 3) ClashCheck.log
     clashPath = Application.GetOpenFilename( _
         FileFilter:="Clash Log (*.log;*.txt),*.log;*.txt,All Files (*.*),*.*", _
-        Title:="Step 3 of 3 — Select ClashCheck.log", _
+        Title:="Step 3 of 3 - Select ClashCheck.log", _
         MultiSelect:=False)
     If clashPath = "False" Or Len(clashPath) = 0 Then
         MsgBox "Cancelled: ClashCheck.log was not selected.", vbExclamation, "Tekla Clash Classifier"
@@ -79,15 +79,15 @@ Public Sub RunClashClassification()
 
     Application.ScreenUpdating = False
     Application.Calculation = xlCalculationManual
-    Application.StatusBar = "Loading Universal Report…"
+    Application.StatusBar = "Loading Universal Report..."
 
     Set parts = LoadParts(CStr(universalPath))
-    Application.StatusBar = "Loading Bolt report…"
+    Application.StatusBar = "Loading Bolt report..."
     Set bolts = LoadBolts(CStr(boltPath))
-    Application.StatusBar = "Parsing ClashCheck.log…"
+    Application.StatusBar = "Parsing ClashCheck.log..."
     Set clashes = ParseClashLog(CStr(clashPath))
 
-    Application.StatusBar = "Classifying clashes…"
+    Application.StatusBar = "Classifying clashes..."
     Set outWb = Workbooks.Add(xlWBATWorksheet)
     Set counts = ClassifyAndWrite(outWb, clashes, parts, bolts)
     WriteSummary outWb, CStr(universalPath), CStr(boltPath), CStr(clashPath), _
@@ -174,7 +174,7 @@ Public Sub EnsureControlSheet()
     ws.Range("A1:D1").Merge
     ws.Rows(1).RowHeight = 28
 
-    ws.Range("A2").Value = "Click RUN. You will be asked for 3 files one by one (Universal Report → Bolt Report → ClashCheck.log). Results are saved to a NEW Excel workbook — this classifier file stays unchanged."
+    ws.Range("A2").Value = "Click RUN. You will be asked for 3 files one by one (Universal Report -> Bolt Report -> ClashCheck.log). Results are saved to a NEW Excel workbook - this classifier file stays unchanged."
     ws.Range("A2").WrapText = True
     ws.Range("A2:D2").Merge
     ws.Rows(2).RowHeight = 48
@@ -190,7 +190,13 @@ Public Sub EnsureControlSheet()
     ws.Range("B5").Value = ""
     ws.Range("B6").Value = ""
 
-    ws.Columns("A").ColumnWidth = 16
+    ws.Range("A11").Value = "If macros blocked"
+    ws.Range("A11").Font.Bold = True
+    ws.Range("B11").Value = "Close Excel. Right-click this .xlsm in File Explorer -> Properties -> check Unblock -> OK. Re-open and Enable Content. Then import TeklaClashClassifier.bas if not already imported."
+    ws.Range("B11").WrapText = True
+    ws.Rows(11).RowHeight = 40
+
+    ws.Columns("A").ColumnWidth = 18
     ws.Columns("B").ColumnWidth = 90
     ws.Columns("C").ColumnWidth = 14
     ws.Columns("D").ColumnWidth = 14
