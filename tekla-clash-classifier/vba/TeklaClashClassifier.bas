@@ -210,7 +210,11 @@ Private Sub EnsureRunButton(ByVal ws As Worksheet)
     Set btn = ws.Buttons.Add(leftPos, topPos, 120, 36)
     btn.Name = RUN_BUTTON_NAME
     btn.Caption = "RUN"
+    ' Prefer workbook-local macro reference (matches embedded VML FmlaMacro).
     btn.OnAction = "RunClashClassification"
+    On Error Resume Next
+    btn.OnAction = "'" & ThisWorkbook.Name & "'!RunClashClassification"
+    On Error GoTo 0
     btn.Font.Bold = True
     btn.Font.Size = 14
 End Sub
